@@ -12,7 +12,8 @@ function e(?string $str): string {
 
 function formatPrice(float|int|string $amount): string {
     $num = (float)$amount;
-    return CURRENCY_SYMBOL . number_format($num, 0, '.', ',');
+    $symbol = defined('CURRENCY_SYMBOL') && !is_numeric(CURRENCY_SYMBOL) && mb_strlen(CURRENCY_SYMBOL) <= 5 ? CURRENCY_SYMBOL : '₹';
+    return $symbol . number_format($num, 0, '.', ',');
 }
 
 function calculateNights(string $checkIn, string $checkOut): int {

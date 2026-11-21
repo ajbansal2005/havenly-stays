@@ -177,7 +177,13 @@ def('DB_PASS', $parsedDb['pass'] ?? env('DB_PASS', ''));
 // App Info
 def('APP_NAME', env('APP_NAME', 'StayHub'));
 def('APP_TAGLINE', env('APP_TAGLINE', 'Find and book unique stays around the world'));
-def('CURRENCY_SYMBOL', env('CURRENCY_SYMBOL', '₹'));
+
+// Sanitize Currency Symbol so numbers or corrupted strings never overwrite it
+$rawCurrency = (string)env('CURRENCY_SYMBOL', '₹');
+if (empty($rawCurrency) || is_numeric($rawCurrency) || mb_strlen($rawCurrency) > 5) {
+    $rawCurrency = '₹';
+}
+def('CURRENCY_SYMBOL', $rawCurrency);
 def('CURRENCY_CODE', env('CURRENCY_CODE', 'INR'));
 
 // Base URL calculation (with automatic detection for Render and Vercel domains)
