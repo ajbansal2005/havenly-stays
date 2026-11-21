@@ -1,0 +1,57 @@
+# ==========================================
+# StayHub - Git Ignore Configuration
+# ==========================================
+
+# Environment credentials (Never commit secret credentials to git)
+.env
+.env.backup
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+
+# PHP Session files (Local runtime data)
+storage/sessions/*
+!storage/sessions/.gitkeep
+
+# Local log & mail receipt files
+storage/logs/*
+!storage/logs/.gitkeep
+*.log
+*.tmp
+
+# Local SQLite databases & setup lock file
+database/*.sqlite
+database/*.sqlite-journal
+database/*.db
+database/.installed
+
+# User uploads (preserve directory structure only)
+uploads/listings/*
+!uploads/listings/.gitkeep
+
+# Operating System junk
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDE & Editor configurations
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+
+# Dependencies & Build artifacts (if any added)
+node_modules/
+vendor/
+dist/
+build/
+.next/

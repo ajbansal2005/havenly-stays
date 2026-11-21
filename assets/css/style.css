@@ -1,0 +1,333 @@
+/* StayHub - Airbnb Inspired Design System */
+:root {
+    --primary-brand: #FF385C;
+    --primary-brand-dark: #E00B41;
+    --primary-brand-light: #FFF0F2;
+    --text-primary: #222222;
+    --text-secondary: #717171;
+    --border-color: #DDDDDD;
+    --bg-light: #F7F7F7;
+    --card-radius: 16px;
+    --transition: all 0.25s ease-in-out;
+}
+
+body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: var(--text-primary);
+    background-color: #FFFFFF;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Brand Logo */
+.brand-icon {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, #FF385C, #E00B41);
+    color: #FFFFFF;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    box-shadow: 0 4px 10px rgba(255, 56, 92, 0.3);
+}
+
+.brand-text {
+    font-size: 1.35rem;
+    color: var(--primary-brand);
+    letter-spacing: -0.5px;
+}
+
+.brand-text strong {
+    color: var(--text-primary);
+}
+
+/* Navbar */
+.main-navbar {
+    padding-top: 14px;
+    padding-bottom: 14px;
+    background: #ffffff !important;
+}
+
+.search-nav-pill a {
+    background-color: #fff;
+    border-color: var(--border-color);
+    font-size: 0.9rem;
+    transition: var(--transition);
+}
+
+.search-nav-pill a:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+    border-color: #bbb;
+}
+
+.search-nav-btn {
+    width: 30px;
+    height: 30px;
+    background: var(--primary-brand);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.avatar-circle {
+    width: 30px;
+    height: 30px;
+    background: #222;
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+}
+
+/* Hero Section */
+.hero-banner {
+    position: relative;
+    border-radius: 24px;
+    overflow: hidden;
+    background: linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.45)), url('https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1600&auto=format&fit=crop&q=80') center/cover no-repeat;
+    color: #fff;
+    padding: 80px 30px 110px;
+    margin-bottom: -50px;
+}
+
+.hero-search-box {
+    position: relative;
+    z-index: 10;
+    background: #FFFFFF;
+    border-radius: 32px;
+    box-shadow: 0 16px 32px rgba(0,0,0,0.15);
+    padding: 10px 16px;
+    border: 1px solid var(--border-color);
+}
+
+/* Category Filter Pills */
+.category-filter-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 10px 14px;
+    border-radius: 12px;
+    transition: var(--transition);
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+}
+
+.category-filter-item:hover,
+.category-filter-item.active {
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--text-primary);
+}
+
+.category-filter-item i {
+    font-size: 1.35rem;
+}
+
+/* Stay Cards */
+.stay-card {
+    border: none;
+    border-radius: var(--card-radius);
+    transition: var(--transition);
+    background: transparent;
+}
+
+.stay-card:hover {
+    transform: translateY(-4px);
+}
+
+.stay-image-wrapper {
+    position: relative;
+    border-radius: var(--card-radius);
+    overflow: hidden;
+    aspect-ratio: 20 / 19;
+    background-color: #eee;
+}
+
+.stay-image-wrapper img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.4s ease;
+}
+
+.stay-card:hover .stay-image-wrapper img {
+    transform: scale(1.05);
+}
+
+.wishlist-heart-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: rgba(0, 0, 0, 0.25);
+    border: none;
+    color: #ffffff;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: transform 0.15s ease, background-color 0.2s ease;
+    z-index: 5;
+}
+
+.wishlist-heart-btn:hover {
+    transform: scale(1.15);
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.wishlist-heart-btn.active {
+    color: var(--primary-brand);
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.stay-badge-type {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    background: rgba(255,255,255,0.92);
+    color: #222;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    backdrop-filter: blur(4px);
+}
+
+/* Photo Gallery on Detail Page */
+.detail-gallery {
+    border-radius: 20px;
+    overflow: hidden;
+    height: 440px;
+}
+
+.gallery-main-img {
+    height: 100%;
+    object-fit: cover;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.gallery-sub-img {
+    height: 215px;
+    object-fit: cover;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.gallery-main-img:hover,
+.gallery-sub-img:hover {
+    opacity: 0.92;
+}
+
+/* Booking Sidebar Card */
+.booking-widget-card {
+    position: sticky;
+    top: 90px;
+    border-radius: 20px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    border: 1px solid var(--border-color);
+}
+
+/* Custom Leaflet Map Styling */
+.stay-map-container {
+    height: 100%;
+    min-height: 550px;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+    border: 1px solid var(--border-color);
+}
+
+.price-marker-pill {
+    background: #ffffff;
+    color: #222222;
+    font-weight: 700;
+    font-size: 13px;
+    padding: 6px 10px;
+    border-radius: 24px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.22);
+    border: 1px solid rgba(0,0,0,0.08);
+    display: inline-block;
+    cursor: pointer;
+    transition: transform 0.15s ease, background-color 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+}
+
+.price-marker-pill:hover,
+.price-marker-pill.active {
+    background: #222222;
+    color: #ffffff;
+    transform: scale(1.1);
+}
+
+/* Flatpickr Airbnb override */
+.flatpickr-calendar {
+    box-shadow: 0 12px 28px rgba(0,0,0,0.18) !important;
+    border-radius: 16px !important;
+    border: 1px solid #ebebeb !important;
+    font-family: inherit !important;
+}
+
+.flatpickr-day.selected, 
+.flatpickr-day.startRange, 
+.flatpickr-day.endRange {
+    background: #222222 !important;
+    border-color: #222222 !important;
+}
+
+.flatpickr-day.inRange {
+    background: #f7f7f7 !important;
+    border-color: #f7f7f7 !important;
+    box-shadow: -5px 0 0 #f7f7f7, 5px 0 0 #f7f7f7 !important;
+}
+
+.flatpickr-day.disabled,
+.flatpickr-day.disabled:hover {
+    color: #c0c0c0 !important;
+    text-decoration: line-through !important;
+    background: #fafafa !important;
+}
+
+/* Custom Buttons */
+.btn-primary,
+.btn-danger {
+    background-color: var(--primary-brand);
+    border-color: var(--primary-brand);
+    font-weight: 600;
+}
+
+.btn-primary:hover,
+.btn-danger:hover {
+    background-color: var(--primary-brand-dark);
+    border-color: var(--primary-brand-dark);
+}
+
+/* Toast alert */
+.toast-success {
+    background-color: #198754;
+    color: #ffffff;
+}
+.toast-danger {
+    background-color: #dc3545;
+    color: #ffffff;
+}
+.toast-info {
+    background-color: #0d6efd;
+    color: #ffffff;
+}
+

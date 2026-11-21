@@ -1,0 +1,40 @@
+# Render.com Blueprint Specification
+# Deploy with 1-click on https://dashboard.render.com/blueprints
+
+services:
+  - type: web
+    name: stayhub-vacation-rentals
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: APP_NAME
+        value: StayHub
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: false
+      - key: CURRENCY_SYMBOL
+        value: ₹
+      - key: CURRENCY_CODE
+        value: INR
+      - key: DB_TYPE
+        value: mysql
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: 3306
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASS
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        value: rzp_test_1DP5mmOlF5G5ag
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_TEST_MODE
+        value: true
