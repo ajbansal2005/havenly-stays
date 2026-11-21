@@ -41,6 +41,9 @@ ehthumbs.db
 Thumbs.db
 desktop.ini
 
+# Temporary Office / Word lock files
+~$*
+
 # IDE & Editor configurations
 .vscode/
 .idea/
