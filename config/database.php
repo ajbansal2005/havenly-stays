@@ -25,7 +25,23 @@ class Database {
                 PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4"
             ];
 
-            // Allow SSL for Cloud Hosted MySQL (Aiven, PlanetScale, Railway, TiDB)
+            // Enable SSL for Cloud Hosted MySQL (TiDB Cloud, Aiven, PlanetScale, Railway)
+            $caPaths = [
+                '/etc/ssl/certs/ca-certificates.crt', // Standard Linux / Debian (Render Docker)
+                '/etc/pki/tls/certs/ca-bundle.crt',   // RedHat / CentOS
+                '/etc/ssl/ca-bundle.pem',             // Alpine
+                'C:/xampp/apache/bin/curl-ca-bundle.crt', // Windows XAMPP
+                'C:/xampp/sendmail/curl-ca-bundle.crt'
+            ];
+            foreach ($caPaths as $ca) {
+                if (file_exists($ca)) {
+                    $options[PDO::MYSQL_ATTR_SSL_CA] = $ca;
+                    break;
+                }
+            }
+            if (!isset($options[PDO::MYSQL_ATTR_SSL_CA]) && defined('PDO::MYSQL_ATTR_SSL_CA')) {
+                $options[PDO::MYSQL_ATTR_SSL_CA] = '';
+            }
             if (defined('PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT') && env('DB_SSL_VERIFY', false) === false) {
                 $options[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = false;
             }

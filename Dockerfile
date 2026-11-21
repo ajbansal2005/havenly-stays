@@ -3,6 +3,7 @@ FROM php:8.2-apache
 
 # Install system dependencies and PHP extensions for MySQL, SQLite, and Fileinfo
 RUN apt-get update && apt-get install -y \
+    ca-certificates \
     libsqlite3-dev \
     libpng-dev \
     libjpeg-dev \
@@ -10,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libzip-dev \
     zip \
     unzip \
+    && update-ca-certificates \
     && docker-php-ext-configure gd --with-jpeg --with-webp \
     && docker-php-ext-install -j$(nproc) \
     pdo \

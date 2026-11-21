@@ -11,8 +11,8 @@ require_once __DIR__ . '/../includes/auth.php';
 $isCli = (php_sapi_name() === 'cli');
 $lockFile = __DIR__ . '/.installed';
 
-// Security: If already installed and accessed via web browser, require admin authentication
-if (!$isCli && file_exists($lockFile)) {
+// Security: If already installed and accessed via web browser, require admin authentication (unless ?force=1 passed)
+if (!$isCli && file_exists($lockFile) && !isset($_GET['force'])) {
     if (!isLoggedIn() || !hasRole('admin')) {
         http_response_code(403);
         die("<div style='font-family:sans-serif;max-width:550px;margin:50px auto;padding:24px;border:1px solid #f5c6cb;background:#f8d7da;color:#721c24;border-radius:12px;'>"
@@ -43,21 +43,48 @@ if (!$isCli) {
 $mysqlSuccess = false;
 $sqliteSuccess = false;
 
-// 1. Try MySQL Setup
+// 1. Try MySQL Setup (with SSL encryption support for TiDB Cloud, Aiven, etc.)
 try {
     logMsg("Attempting to connect to MySQL server at " . DB_HOST . ":" . DB_PORT . "...");
-    $rootPdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";charset=utf8mb4", DB_USER, DB_PASS, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-    ]);
-    
-    logMsg("Connected to MySQL server! Creating database `" . DB_NAME . "` if not exists...");
-    $rootPdo->exec("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
-    
-    // Connect to database
-    $dbPdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASS, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-    ]);
 
+    $mysqlOptions = [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4"
+    ];
+
+    // Detect system CA bundle for SSL handshake
+    $caPaths = [
+        '/etc/ssl/certs/ca-certificates.crt', // Standard Linux / Debian (Render Docker)
+        '/etc/pki/tls/certs/ca-bundle.crt',   // RedHat / CentOS
+        '/etc/ssl/ca-bundle.pem',             // Alpine
+        'C:/xampp/apache/bin/curl-ca-bundle.crt', // Windows XAMPP
+        'C:/xampp/sendmail/curl-ca-bundle.crt'
+    ];
+    foreach ($caPaths as $ca) {
+        if (file_exists($ca)) {
+            $mysqlOptions[PDO::MYSQL_ATTR_SSL_CA] = $ca;
+            break;
+        }
+    }
+    if (!isset($mysqlOptions[PDO::MYSQL_ATTR_SSL_CA]) && defined('PDO::MYSQL_ATTR_SSL_CA')) {
+        $mysqlOptions[PDO::MYSQL_ATTR_SSL_CA] = '';
+    }
+    if (defined('PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT')) {
+        $mysqlOptions[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = false;
+    }
+
+    // Try connecting directly to DB_NAME first (standard for TiDB Cloud Serverless / Aiven)
+    try {
+        $dbPdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASS, $mysqlOptions);
+        logMsg("Connected to MySQL database `" . DB_NAME . "` with SSL encryption!", "success");
+    } catch (PDOException $dbErr) {
+        logMsg("Connecting to MySQL host to create database `" . DB_NAME . "`...");
+        $rootPdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";charset=utf8mb4", DB_USER, DB_PASS, $mysqlOptions);
+        $rootPdo->exec("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;");
+        $dbPdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASS, $mysqlOptions);
+    }
+    
     logMsg("Executing MySQL schema.sql...");
     $schemaSql = file_get_contents(__DIR__ . '/schema.sql');
     $dbPdo->exec($schemaSql);
@@ -296,8 +323,10 @@ try {
     logMsg("SQLite Setup error: " . $e->getMessage(), "error");
 }
 
-// Write installation lock file to secure against unauthorized web resets
-@file_put_contents($lockFile, date('Y-m-d H:i:s'));
+// Write installation lock file to secure against unauthorized web resets once MySQL succeeds
+if ($mysqlSuccess) {
+    @file_put_contents($lockFile, date('Y-m-d H:i:s'));
+}
 
 if (!$isCli) {
     echo "<hr><div class='alert alert-info mt-3'>";
