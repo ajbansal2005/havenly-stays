@@ -211,15 +211,34 @@ include __DIR__ . '/includes/header.php';
                             <input type="hidden" name="check_in" value="<?= e($checkIn) ?>">
                             <input type="hidden" name="check_out" value="<?= e($checkOut) ?>">
                             <input type="hidden" name="guests_count" value="<?= $guestsCount ?>">
-                            <input type="hidden" name="payment_method" value="razorpay">
+                            <input type="hidden" name="payment_method" id="paymentMethodInput" value="razorpay">
                             <input type="hidden" name="razorpay_payment_id" id="razorpayPaymentIdInput" value="">
 
-                            <div class="p-3 bg-light rounded-3 border mb-3">
+                            <!-- Payment Method Selection -->
+                            <label class="form-label fw-bold small text-muted text-uppercase mb-2">Choose Payment Option</label>
+                            
+                            <div class="p-3 bg-white rounded-3 border mb-2 shadow-sm payment-choice-box" style="cursor: pointer;">
                                 <div class="form-check d-flex align-items-center gap-2">
-                                    <input class="form-check-input" type="radio" name="payment_choice" id="payRazorpay" checked>
-                                    <label class="form-check-label fw-bold d-flex align-items-center gap-2" for="payRazorpay">
-                                        <i class="fa-solid fa-credit-card text-primary"></i>
-                                        Credit/Debit Card, UPI, Net Banking via Razorpay
+                                    <input class="form-check-input" type="radio" name="payment_choice" id="payRazorpay" value="razorpay" checked>
+                                    <label class="form-check-label fw-bold d-flex align-items-center gap-2 w-100 cursor-pointer" for="payRazorpay">
+                                        <i class="fa-solid fa-credit-card text-danger fs-5"></i>
+                                        <div>
+                                            <div>Razorpay Test Gateway</div>
+                                            <div class="small text-muted fw-normal">UPI, Credit/Debit Card, Net Banking (Test Mode)</div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="p-3 bg-white rounded-3 border mb-3 shadow-sm payment-choice-box" style="cursor: pointer;">
+                                <div class="form-check d-flex align-items-center gap-2">
+                                    <input class="form-check-input" type="radio" name="payment_choice" id="payInstant" value="instant_demo">
+                                    <label class="form-check-label fw-bold d-flex align-items-center gap-2 w-100 cursor-pointer" for="payInstant">
+                                        <i class="fa-solid fa-bolt text-warning fs-5"></i>
+                                        <div>
+                                            <div>Instant Test Payment (Demo / Viva Mode)</div>
+                                            <div class="small text-muted fw-normal">1-Click instant reservation without gateway popups</div>
+                                        </div>
                                     </label>
                                 </div>
                             </div>
@@ -227,6 +246,11 @@ include __DIR__ . '/includes/header.php';
                             <!-- Razorpay Trigger Button -->
                             <button type="button" id="btnPayRazorpay" class="btn btn-danger btn-lg w-100 rounded-3 fw-bold py-3 mb-2 shadow-sm">
                                 <i class="fa-solid fa-lock me-2"></i> Pay <?= formatPrice($pricing['total']) ?> with Razorpay
+                            </button>
+
+                            <!-- Instant Demo Trigger Button -->
+                            <button type="button" id="btnPayInstant" class="btn btn-warning btn-lg w-100 rounded-3 fw-bold py-3 mb-2 shadow-sm d-none">
+                                <i class="fa-solid fa-bolt me-2"></i> Confirm Instant Test Booking (<?= formatPrice($pricing['total']) ?>)
                             </button>
                         </form>
 
@@ -289,29 +313,61 @@ include __DIR__ . '/includes/header.php';
 </div>
 
 <?php 
+$userPhone = !empty($currentUser['phone']) ? preg_replace('/[^0-9]/', '', $currentUser['phone']) : '9876543210';
+if (strlen($userPhone) < 10) {
+    $userPhone = '9876543210';
+}
+
 $extraScripts = "
 <script>
 $(document).ready(function() {
+    // Switch between Razorpay and Instant Demo
+    $('input[name=\"payment_choice\"]').on('change', function() {
+        if ($('#payRazorpay').is(':checked')) {
+            $('#btnPayRazorpay').removeClass('d-none');
+            $('#btnPayInstant').addClass('d-none');
+            $('#paymentMethodInput').val('razorpay');
+        } else {
+            $('#btnPayRazorpay').addClass('d-none');
+            $('#btnPayInstant').removeClass('d-none');
+            $('#paymentMethodInput').val('instant_demo');
+        }
+    });
+
+    $('.payment-choice-box').on('click', function() {
+        $(this).find('input[type=\"radio\"]').prop('checked', true).trigger('change');
+    });
+
+    // 1-Click Instant Demo Payment Handler
+    $('#btnPayInstant').on('click', function(e) {
+        e.preventDefault();
+        $('#paymentMethodInput').val('instant_demo');
+        $('#razorpayPaymentIdInput').val('pay_demo_' + Math.random().toString(36).substring(2, 10).toUpperCase());
+        $('#checkoutPaymentForm').submit();
+    });
+
+    // Razorpay Gateway Handler
     $('#btnPayRazorpay').on('click', function(e) {
         e.preventDefault();
         
         // Open Razorpay Checkout modal in test mode
         const options = {
             'key': '" . RAZORPAY_KEY_ID . "',
-            'amount': '" . $totalAmountInPaise . "',
+            'amount': " . (int)$totalAmountInPaise . ",
             'currency': '" . CURRENCY_CODE . "',
             'name': '" . APP_NAME . "',
             'description': 'Booking for " . addslashes($listing['title']) . "',
             'image': '" . BASE_URL . "/assets/images/placeholders/brand_logo.png',
             'handler': function (response) {
                 // Payment succeeded in Razorpay Checkout modal
+                $('#paymentMethodInput').val('razorpay');
                 $('#razorpayPaymentIdInput').val(response.razorpay_payment_id || 'pay_demo_' + Date.now());
                 $('#checkoutPaymentForm').submit();
             },
             'prefill': {
                 'name': '" . addslashes($currentUser['name']) . "',
                 'email': '" . addslashes($currentUser['email']) . "',
-                'contact': '" . addslashes($currentUser['phone'] ?? '+919876543210') . "'
+                'contact': '" . $userPhone . "'
             },
             'theme': {
                 'color': '#FF385C'
@@ -319,6 +375,11 @@ $(document).ready(function() {
             'modal': {
                 'ondismiss': function() {
                     console.log('Checkout modal closed.');
+                    if (confirm('Razorpay modal closed. Would you like to confirm this reservation instantly with 1-Click Demo Payment?')) {
+                        $('#paymentMethodInput').val('instant_demo');
+                        $('#razorpayPaymentIdInput').val('pay_demo_' + Math.random().toString(36).substring(2, 10).toUpperCase());
+                        $('#checkoutPaymentForm').submit();
+                    }
                 }
             }
         };
