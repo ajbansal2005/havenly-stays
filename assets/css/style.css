@@ -332,3 +332,31 @@ body {
     color: #ffffff;
 }
 
+/* Role Selector Cards */
+.cursor-pointer {
+    cursor: pointer !important;
+}
+
+.role-option-card {
+    border-width: 2px !important;
+    border-color: #e5e7eb !important;
+    border-radius: 14px !important;
+    user-select: none;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.role-option-card:hover {
+    border-color: #cbd5e1 !important;
+    background-color: #f8fafc;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.role-option-card.active-role-card,
+.role-option-card:has(input[type="radio"]:checked) {
+    border-color: var(--primary-brand) !important;
+    background-color: var(--primary-brand-light) !important;
+    box-shadow: 0 4px 14px rgba(255, 56, 92, 0.15) !important;
+}
+
+

@@ -10,6 +10,49 @@ require_once __DIR__ . '/logger.php';
 
 class Mailer {
 
+    public static function sendRegistrationConfirmation(array $user): bool {
+        $email = trim((string)($user['email'] ?? ''));
+        if ($email === '') {
+            return false;
+        }
+
+        $name = trim((string)($user['name'] ?? 'Guest'));
+        $role = trim((string)($user['role'] ?? 'guest'));
+        $subject = 'Welcome to ' . (defined('APP_NAME') ? APP_NAME : 'StayHub');
+        $body = "
+        <!DOCTYPE html>
+        <html><head><meta charset='utf-8'></head>
+        <body style='font-family:Arial,sans-serif;background:#f7f7f7;padding:24px'>
+          <div style='max-width:600px;margin:auto;background:white;border-radius:12px;padding:32px'>
+            <h1 style='color:#FF385C;margin-top:0'>Welcome to " . htmlspecialchars(defined('APP_NAME') ? APP_NAME : 'StayHub', ENT_QUOTES, 'UTF-8') . "</h1>
+            <p>Hi " . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . ",</p>
+            <p>Your " . htmlspecialchars($role, ENT_QUOTES, 'UTF-8') . " account has been created successfully.</p>
+            <p>You can now " . ($role === 'host' ? 'create listings and manage reservations.' : 'search stays and make reservations.') . "</p>
+          </div>
+        </body></html>";
+
+        self::logEmail($email, $name, $subject, $body);
+
+        $emailJsTemplate = defined('EMAILJS_REGISTRATION_TEMPLATE_ID') ? EMAILJS_REGISTRATION_TEMPLATE_ID : '';
+        $emailJsSent = self::sendViaEmailJs(
+            $email,
+            $name,
+            $subject,
+            $body,
+            $emailJsTemplate,
+            [
+                'name' => $name,
+                'role' => $role,
+                'login_url' => BASE_URL . '/login.php'
+            ]
+        );
+        if ($emailJsSent) {
+            return true;
+        }
+
+        return self::sendViaSmtp($email, $name, $subject, $body);
+    }
+
     public static function sendBookingConfirmation(array $booking, array $listing, array $guest, array $host): bool {
         try {
             $listingTitle = $listing['title'] ?? 'Your Stay';
@@ -20,44 +63,183 @@ class Mailer {
             // Always log to local receipt archive for immediate inspection during testing/demos
             self::logEmail($guest['email'] ?? '', $guest['name'] ?? 'Guest', $subject, $body);
 
-            // If real SMTP credentials are provided, attempt delivery
-            if (defined('MAIL_ENABLED') && MAIL_ENABLED && !empty(SMTP_HOST) && !empty(SMTP_USER) && !empty(SMTP_PASS)) {
-                try {
-                    if (class_exists('PHPMailer\PHPMailer\PHPMailer')) {
-                        $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
-                        $mail->isSMTP();
-                        $mail->Host       = SMTP_HOST;
-                        $mail->SMTPAuth   = true;
-                        $mail->Username   = SMTP_USER;
-                        $mail->Password   = SMTP_PASS;
-                        $mail->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-                        $mail->Port       = SMTP_PORT;
+            $guestTemplate = defined('EMAILJS_BOOKING_TEMPLATE_ID') ? EMAILJS_BOOKING_TEMPLATE_ID : '';
+            $hostTemplate = defined('EMAILJS_HOST_BOOKING_TEMPLATE_ID') ? EMAILJS_HOST_BOOKING_TEMPLATE_ID : '';
+            $bookingParams = [
+                'booking_code' => $bookingCode,
+                'listing_title' => $listingTitle,
+                'check_in' => $booking['check_in'] ?? '',
+                'check_out' => $booking['check_out'] ?? '',
+                'total_price' => formatPrice($booking['total_price'] ?? 0),
+                'guest_name' => $guest['name'] ?? 'Guest',
+                'host_name' => $host['name'] ?? 'Host'
+            ];
 
-                        $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
-                        $mail->addAddress($guest['email'], $guest['name']);
-                        $mail->isHTML(true);
-                        $mail->Subject = $subject;
-                        $mail->Body    = $body;
+            $guestSent = self::sendViaEmailJs(
+                $guest['email'] ?? '',
+                $guest['name'] ?? 'Guest',
+                $subject,
+                $body,
+                $guestTemplate,
+                $bookingParams
+            );
+            if (!$guestSent) {
+                $guestSent = self::sendViaSmtp($guest['email'] ?? '', $guest['name'] ?? 'Guest', $subject, $body);
+            }
 
-                        $sent = $mail->send();
-                        Logger::info("Booking confirmation email dispatched via SMTP", [
-                            'booking_code' => $bookingCode,
-                            'recipient'    => $guest['email']
-                        ]);
-                        return $sent;
-                    }
-                } catch (\Throwable $e) {
-                    Logger::error("PHPMailer dispatch failed: " . $e->getMessage(), [
-                        'booking_code' => $bookingCode,
-                        'recipient'    => $guest['email'] ?? ''
-                    ]);
+            $hostSent = false;
+            if (!empty($host['email'])) {
+                $hostSubject = "New booking received: " . $listingTitle . " (" . $bookingCode . ")";
+                $hostSent = self::sendViaEmailJs(
+                    $host['email'],
+                    $host['name'] ?? 'Host',
+                    $hostSubject,
+                    $body,
+                    $hostTemplate,
+                    array_merge($bookingParams, [
+                        'subject' => $hostSubject,
+                        'guest_email' => $guest['email'] ?? ''
+                    ])
+                );
+                if (!$hostSent) {
+                    $hostSent = self::sendViaSmtp($host['email'], $host['name'] ?? 'Host', $hostSubject, $body);
                 }
             }
 
-            Logger::info("Booking receipt archived locally", ['booking_code' => $bookingCode]);
-            return true;
+            Logger::info("Booking confirmation delivery completed", [
+                'booking_code' => $bookingCode,
+                'guest_sent' => $guestSent,
+                'host_sent' => $hostSent
+            ]);
+            return $guestSent && $hostSent;
         } catch (\Throwable $t) {
             Logger::error("Unexpected error in sendBookingConfirmation: " . $t->getMessage());
+            return false;
+        }
+    }
+
+    private static function sendViaEmailJs(
+        string $toEmail,
+        string $toName,
+        string $subject,
+        string $htmlBody,
+        string $templateId,
+        array $extraParams = []
+    ): bool {
+        if (
+            $toEmail === '' ||
+            !defined('EMAILJS_SERVICE_ID') ||
+            EMAILJS_SERVICE_ID === '' ||
+            !defined('EMAILJS_PUBLIC_KEY') ||
+            EMAILJS_PUBLIC_KEY === '' ||
+            $templateId === ''
+        ) {
+            return false;
+        }
+
+        $payload = array_merge([
+            'service_id' => EMAILJS_SERVICE_ID,
+            'template_id' => $templateId,
+            'user_id' => EMAILJS_PUBLIC_KEY,
+            'template_params' => array_merge($extraParams, [
+                'to_email' => $toEmail,
+                'to_name' => $toName,
+                'subject' => $subject,
+                'message' => strip_tags($htmlBody),
+                'html_message' => $htmlBody,
+                'app_name' => defined('APP_NAME') ? APP_NAME : 'StayHub'
+            ])
+        ]);
+
+        if (defined('EMAILJS_PRIVATE_KEY') && EMAILJS_PRIVATE_KEY !== '') {
+            $payload['accessToken'] = EMAILJS_PRIVATE_KEY;
+        }
+
+        if (!function_exists('curl_init')) {
+            Logger::warning('EmailJS delivery skipped because the PHP cURL extension is unavailable.', [
+                'recipient' => $toEmail
+            ]);
+            return false;
+        }
+
+        $ch = curl_init('https://api.emailjs.com/api/v1.0/email/send');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_CONNECTTIMEOUT => 10
+        ]);
+        $response = curl_exec($ch);
+        $httpStatus = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($response === false || $httpStatus < 200 || $httpStatus >= 300) {
+            Logger::error('EmailJS delivery failed', [
+                'recipient' => $toEmail,
+                'template_id' => $templateId,
+                'http_status' => $httpStatus,
+                'error' => $curlError !== '' ? $curlError : (string)$response
+            ]);
+            return false;
+        }
+
+        Logger::info('EmailJS message sent', [
+            'recipient' => $toEmail,
+            'template_id' => $templateId
+        ]);
+        return true;
+    }
+
+    private static function sendViaSmtp(string $toEmail, string $toName, string $subject, string $htmlBody): bool {
+        if (
+            $toEmail === '' ||
+            !defined('MAIL_ENABLED') ||
+            !MAIL_ENABLED ||
+            !defined('SMTP_HOST') ||
+            SMTP_HOST === '' ||
+            !defined('SMTP_USER') ||
+            SMTP_USER === '' ||
+            !defined('SMTP_PASS') ||
+            SMTP_PASS === ''
+        ) {
+            return false;
+        }
+
+        try {
+            if (!class_exists('PHPMailer\PHPMailer\PHPMailer')) {
+                Logger::warning('SMTP delivery skipped because PHPMailer is not installed.', [
+                    'recipient' => $toEmail
+                ]);
+                return false;
+            }
+
+            $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+            $mail->isSMTP();
+            $mail->Host = SMTP_HOST;
+            $mail->SMTPAuth = true;
+            $mail->Username = SMTP_USER;
+            $mail->Password = SMTP_PASS;
+            $mail->SMTPSecure = \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+            $mail->Port = SMTP_PORT;
+            $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
+            $mail->addAddress($toEmail, $toName);
+            $mail->isHTML(true);
+            $mail->Subject = $subject;
+            $mail->Body = $htmlBody;
+
+            $sent = $mail->send();
+            Logger::info('SMTP message sent', [
+                'recipient' => $toEmail,
+                'subject' => $subject
+            ]);
+            return $sent;
+        } catch (\Throwable $e) {
+            Logger::error('SMTP delivery failed: ' . $e->getMessage(), [
+                'recipient' => $toEmail
+            ]);
             return false;
         }
     }

@@ -340,8 +340,8 @@ def('UPLOAD_DIR', ROOT_PATH . '/uploads/listings/');
 def('UPLOAD_URL', BASE_URL . '/uploads/listings/');
 
 // Razorpay Test Credentials (Loaded from .env)
-def('RAZORPAY_KEY_ID', env('RAZORPAY_KEY_ID', ''));
-def('RAZORPAY_KEY_SECRET', env('RAZORPAY_KEY_SECRET', ''));
+def('RAZORPAY_KEY_ID', env('RAZORPAY_KEY_ID', 'rzp_test_1DP5mmOlF5G5ag'));
+def('RAZORPAY_KEY_SECRET', env('RAZORPAY_KEY_SECRET', 'test_secret_key_123456'));
 def('RAZORPAY_TEST_MODE', env('RAZORPAY_TEST_MODE', true));
 
 // Mail Configuration (Loaded from .env)
@@ -352,6 +352,14 @@ def('SMTP_USER', env('SMTP_USER', ''));
 def('SMTP_PASS', env('SMTP_PASS', ''));
 def('SMTP_FROM_EMAIL', env('SMTP_FROM_EMAIL', 'no-reply@stayhub.test'));
 def('SMTP_FROM_NAME', env('SMTP_FROM_NAME', 'StayHub Bookings'));
+
+// EmailJS Configuration (Used by server-side PHP email delivery)
+def('EMAILJS_SERVICE_ID', env('EMAILJS_SERVICE_ID', ''));
+def('EMAILJS_PUBLIC_KEY', env('EMAILJS_PUBLIC_KEY', ''));
+def('EMAILJS_PRIVATE_KEY', env('EMAILJS_PRIVATE_KEY', ''));
+def('EMAILJS_REGISTRATION_TEMPLATE_ID', env('EMAILJS_REGISTRATION_TEMPLATE_ID', ''));
+def('EMAILJS_BOOKING_TEMPLATE_ID', env('EMAILJS_BOOKING_TEMPLATE_ID', ''));
+def('EMAILJS_HOST_BOOKING_TEMPLATE_ID', env('EMAILJS_HOST_BOOKING_TEMPLATE_ID', ''));
 
 // Timezone
 date_default_timezone_set(env('APP_TIMEZONE', 'Asia/Kolkata'));

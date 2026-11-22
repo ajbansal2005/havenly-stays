@@ -79,6 +79,12 @@ Under the **Environment** tab, add:
 | `RAZORPAY_KEY_ID` | `<your-razorpay-test-key-id>` |
 | `RAZORPAY_KEY_SECRET` | `<your-razorpay-test-key-secret>` |
 | `RAZORPAY_TEST_MODE` | `true` |
+| `EMAILJS_SERVICE_ID` | Your EmailJS service ID |
+| `EMAILJS_PUBLIC_KEY` | Your EmailJS public key |
+| `EMAILJS_PRIVATE_KEY` | Your EmailJS private key (recommended) |
+| `EMAILJS_REGISTRATION_TEMPLATE_ID` | Registration confirmation template ID |
+| `EMAILJS_BOOKING_TEMPLATE_ID` | Guest booking confirmation template ID |
+| `EMAILJS_HOST_BOOKING_TEMPLATE_ID` | Host booking notification template ID |
 
 *(Alternatively, if your cloud provider gives a connection URL like `mysql://user:pass@host:port/dbname`, simply add `DATABASE_URL` and StayHub will parse it automatically!)*
 
