@@ -11,21 +11,27 @@ require_once __DIR__ . '/includes/helpers.php';
 requireLogin();
 
 $db = getDB();
-$userId = getCurrentUserId();
+$userId = (int)getCurrentUserId();
+$wishlistItems = [];
 
-// Fetch wishlisted stays
-$sql = "SELECT l.*,
-               COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
-               COALESCE((SELECT COUNT(*) FROM reviews WHERE listing_id = l.id), 0) AS review_count,
-               (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
-        FROM wishlists w
-        JOIN listings l ON w.listing_id = l.id
-        WHERE w.user_id = :uid
-        ORDER BY w.created_at DESC";
+try {
+    // Fetch wishlisted stays
+    $sql = "SELECT l.*,
+                   COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
+                   COALESCE((SELECT COUNT(*) FROM reviews WHERE listing_id = l.id), 0) AS review_count,
+                   (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
+            FROM wishlists w
+            JOIN listings l ON w.listing_id = l.id
+            WHERE w.user_id = :uid
+            ORDER BY w.created_at DESC";
 
-$stmt = $db->prepare($sql);
-$stmt->execute([':uid' => $userId]);
-$wishlistItems = $stmt->fetchAll();
+    $stmt = $db->prepare($sql);
+    $stmt->execute([':uid' => $userId]);
+    $wishlistItems = $stmt->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to fetch wishlist: " . $t->getMessage(), ['user_id' => $userId]);
+    setFlash('danger', 'Unable to retrieve your wishlist at this time.');
+}
 
 $pageTitle = 'My Wishlist';
 include __DIR__ . '/includes/header.php';

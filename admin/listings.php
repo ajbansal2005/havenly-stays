@@ -11,30 +11,47 @@ require_once __DIR__ . '/../includes/helpers.php';
 requireRole('admin');
 
 $db = getDB();
+$adminId = (int)getCurrentUserId();
 $statusFilter = trim($_GET['status'] ?? 'all');
 
 // Handle Actions (Approve, Reject, Toggle Featured, Delete)
-if (isset($_GET['action']) && isset($_GET['id'])) {
-    $action = $_GET['action'];
-    $targetId = (int)$_GET['id'];
-    $csrf = $_GET['csrf_token'] ?? '';
+$action = $_REQUEST['action'] ?? null;
+$targetId = isset($_REQUEST['id']) ? (int)$_REQUEST['id'] : 0;
+$csrf = $_REQUEST['csrf_token'] ?? null;
 
-    if (verifyCsrfToken($csrf)) {
-        if ($action === 'approve') {
-            $db->prepare("UPDATE listings SET status = 'approved' WHERE id = :id")->execute([':id' => $targetId]);
-            setFlash('success', 'Listing approved successfully!');
-        } elseif ($action === 'reject') {
-            $db->prepare("UPDATE listings SET status = 'rejected' WHERE id = :id")->execute([':id' => $targetId]);
-            setFlash('warning', 'Listing has been rejected.');
-        } elseif ($action === 'toggle_featured') {
-            $db->prepare("UPDATE listings SET featured = CASE WHEN featured = 1 THEN 0 ELSE 1 END WHERE id = :id")->execute([':id' => $targetId]);
-            setFlash('info', 'Featured status updated.');
-        } elseif ($action === 'delete') {
-            $db->prepare("DELETE FROM listings WHERE id = :id")->execute([':id' => $targetId]);
-            setFlash('danger', 'Listing permanently deleted.');
-        }
-    } else {
+if ($action && $targetId > 0) {
+    $allowedActions = ['approve', 'reject', 'toggle_featured', 'delete'];
+
+    if (!verifyCsrfToken($csrf)) {
+        Logger::security("CSRF mismatch on admin listing action", ['admin_id' => $adminId, 'action' => $action]);
         setFlash('danger', 'Invalid security token.');
+    } elseif (!in_array($action, $allowedActions, true)) {
+        setFlash('danger', 'Invalid action specified.');
+    } else {
+        try {
+            if ($action === 'approve') {
+                $db->prepare("UPDATE listings SET status = 'approved' WHERE id = :id")->execute([':id' => $targetId]);
+                Logger::security("Listing approved by admin", ['admin_id' => $adminId, 'listing_id' => $targetId]);
+                setFlash('success', 'Listing approved successfully!');
+            } elseif ($action === 'reject') {
+                $db->prepare("UPDATE listings SET status = 'rejected' WHERE id = :id")->execute([':id' => $targetId]);
+                Logger::security("Listing rejected by admin", ['admin_id' => $adminId, 'listing_id' => $targetId]);
+                setFlash('warning', 'Listing has been rejected.');
+            } elseif ($action === 'toggle_featured') {
+                $db->prepare("UPDATE listings SET featured = CASE WHEN featured = 1 THEN 0 ELSE 1 END WHERE id = :id")->execute([':id' => $targetId]);
+                Logger::security("Listing featured status toggled by admin", ['admin_id' => $adminId, 'listing_id' => $targetId]);
+                setFlash('info', 'Featured status updated.');
+            } elseif ($action === 'delete') {
+                Database::transaction(function (PDO $db) use ($targetId) {
+                    $db->prepare("DELETE FROM listings WHERE id = :id")->execute([':id' => $targetId]);
+                });
+                Logger::security("Listing permanently deleted by admin", ['admin_id' => $adminId, 'listing_id' => $targetId]);
+                setFlash('danger', 'Listing permanently deleted.');
+            }
+        } catch (\Throwable $t) {
+            Logger::error("Admin listing action failed: " . $t->getMessage(), ['action' => $action, 'listing_id' => $targetId]);
+            setFlash('danger', 'Failed to perform requested action on listing.');
+        }
     }
     header('Location: ' . BASE_URL . '/admin/listings.php?status=' . urlencode($statusFilter));
     exit;
@@ -47,17 +64,23 @@ if (in_array($statusFilter, ['pending', 'approved', 'rejected'], true)) {
     $params[':status'] = $statusFilter;
 }
 
-$sql = "SELECT l.*, u.name as host_name, u.email as host_email,
-               (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image,
-               COALESCE((SELECT COUNT(*) FROM bookings WHERE listing_id = l.id), 0) AS booking_count
-        FROM listings l
-        JOIN users u ON l.host_id = u.id
-        WHERE {$whereClause}
-        ORDER BY l.created_at DESC";
+$listings = [];
+try {
+    $sql = "SELECT l.*, u.name as host_name, u.email as host_email,
+                   (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image,
+                   COALESCE((SELECT COUNT(*) FROM bookings WHERE listing_id = l.id), 0) AS booking_count
+            FROM listings l
+            JOIN users u ON l.host_id = u.id
+            WHERE {$whereClause}
+            ORDER BY l.created_at DESC";
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$listings = $stmt->fetchAll();
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $listings = $stmt->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to load admin listings: " . $t->getMessage());
+    setFlash('danger', 'Failed to load listings.');
+}
 
 $pageTitle = 'Manage Listings - Admin';
 include __DIR__ . '/../includes/header.php';

@@ -1,9 +1,10 @@
 <?php
 /**
  * StayHub Booking Checkout & Razorpay Payment Processor
- * - Double-booking prevention with strict SQL date-overlap checks inside transaction
+ * - Concurrency & double-booking prevention with strict SQL date-overlap checks inside transaction
+ * - Host self-booking prevention
  * - Razorpay standard modal integration & test mode simulation
- * - Email confirmation generation via Mailer
+ * - Email confirmation generation via Mailer with structured logging
  */
 
 require_once __DIR__ . '/config/config.php';
@@ -11,20 +12,21 @@ require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/mailer.php';
+require_once __DIR__ . '/includes/logger.php';
 
 requireLogin();
 
 $db = getDB();
 $currentUser = getCurrentUser();
-$guestId = $currentUser['id'];
+$guestId = (int)$currentUser['id'];
 
 // Initial POST from listing_detail or GET parameters
 $listingId = isset($_REQUEST['listing_id']) ? (int)$_REQUEST['listing_id'] : 0;
 $checkIn = trim($_REQUEST['check_in'] ?? '');
 $checkOut = trim($_REQUEST['check_out'] ?? '');
-$guestsCount = isset($_REQUEST['guests_count']) ? (int)$_REQUEST['guests_count'] : 1;
+$rawGuests = isset($_REQUEST['guests_count']) ? (int)$_REQUEST['guests_count'] : 1;
 
-if ($listingId <= 0 || empty($checkIn) || empty($checkOut)) {
+if ($listingId <= 0 || !isValidDate($checkIn) || !isValidDate($checkOut)) {
     setFlash('danger', 'Invalid booking parameters. Please choose dates on the stay page.');
     header('Location: ' . BASE_URL . '/listings.php');
     exit;
@@ -42,31 +44,48 @@ $stmtListing->execute([':id' => $listingId]);
 $listing = $stmtListing->fetch();
 
 if (!$listing) {
-    setFlash('danger', 'Listing is not available.');
+    setFlash('danger', 'Listing is not available or has been removed.');
     header('Location: ' . BASE_URL . '/listings.php');
     exit;
 }
 
-// Validate Dates
-$d1 = new DateTime($checkIn);
-$d2 = new DateTime($checkOut);
-$today = new DateTime('today');
-
-if ($d1 < $today || $d2 <= $d1) {
-    setFlash('danger', 'Invalid check-in or check-out dates.');
+// Host Self-Booking Prevention
+if ((int)$listing['host_id'] === $guestId) {
+    setFlash('danger', 'You cannot book your own property listing.');
     header('Location: ' . BASE_URL . '/listing_detail.php?id=' . $listingId);
     exit;
 }
 
+// Validate Dates Logic
+$d1 = parseDate($checkIn);
+$d2 = parseDate($checkOut);
+$today = new DateTime('today');
+
+if (!$d1 || !$d2 || $d1 < $today || $d2 <= $d1) {
+    setFlash('danger', 'Invalid check-in or check-out dates. Check-in cannot be in the past and check-out must be after check-in.');
+    header('Location: ' . BASE_URL . '/listing_detail.php?id=' . $listingId);
+    exit;
+}
+
+if ($d1->diff($d2)->days > 180) {
+    setFlash('danger', 'Maximum reservation duration is 180 consecutive days.');
+    header('Location: ' . BASE_URL . '/listing_detail.php?id=' . $listingId);
+    exit;
+}
+
+// Validate and bound guests count
+$maxGuests = max(1, (int)($listing['max_guests'] ?? 1));
+$guestsCount = max(1, min($maxGuests, $rawGuests));
+
 // Calculate server-side verified price
 $pricing = calculateBookingPrice($listing, $checkIn, $checkOut);
-$totalAmountInPaise = (int)round($pricing['total'] * 100); // For Razorpay amount in paise
+$totalAmountInPaise = (int)round($pricing['total'] * 100);
 
 // Handle Final Payment Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'confirm_payment') {
-    $csrf = $_POST['csrf_token'] ?? '';
-    $paymentMethod = $_POST['payment_method'] ?? 'razorpay';
-    $razorpayPaymentId = trim($_POST['razorpay_payment_id'] ?? '');
+    $csrf = $_POST['csrf_token'] ?? null;
+    $paymentMethod = in_array(($_POST['payment_method'] ?? ''), ['razorpay', 'instant_demo'], true) ? $_POST['payment_method'] : 'razorpay';
+    $rawPayId = trim($_POST['razorpay_payment_id'] ?? '');
 
     if (!verifyCsrfToken($csrf)) {
         setFlash('danger', 'Session expired. Please try reserving again.');
@@ -74,72 +93,116 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         exit;
     }
 
-    if (empty($razorpayPaymentId)) {
-        $razorpayPaymentId = 'pay_sim_' . strtoupper(bin2hex(random_bytes(6)));
-    }
-
-    // Double-Booking Check right before inserting
-    if (checkDateOverlap($listingId, $checkIn, $checkOut)) {
-        setFlash('danger', 'Sorry! Another traveler just booked those exact dates. Please select different dates.');
-        header('Location: ' . BASE_URL . '/listing_detail.php?id=' . $listingId);
-        exit;
-    }
-
-    // Generate unique booking code
-    $bookingCode = 'BK-' . strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', $listing['city']), 0, 3)) . '-' . mt_rand(100000, 999999);
-    $razorpayOrderId = 'order_' . mt_rand(100000, 999999);
+    $razorpayPaymentId = !empty($rawPayId) ? substr(preg_replace('/[^a-zA-Z0-9_-]/', '', $rawPayId), 0, 100) : ('pay_sim_' . strtoupper(bin2hex(random_bytes(6))));
+    $bookingCreated = false;
+    $finalBookingCode = '';
 
     try {
-        $stmtInsert = $db->prepare("
-            INSERT INTO bookings (
-                booking_code, listing_id, guest_id, check_in, check_out, 
-                guests_count, total_nights, price_per_night, cleaning_fee, service_fee, 
-                total_price, payment_status, payment_method, razorpay_order_id, razorpay_payment_id, booking_status
-            ) VALUES (
-                :code, :lid, :gid, :check_in, :check_out,
-                :guests, :nights, :rate, :clean, :serv,
-                :total, 'paid', :method, :order_id, :pay_id, 'confirmed'
-            )
-        ");
+        Database::transaction(function (PDO $db) use (
+            $listingId, $guestId, $checkIn, $checkOut, $guestsCount, $pricing,
+            $paymentMethod, $razorpayPaymentId, $listing, &$finalBookingCode
+        ) {
+            // Concurrency Lock: Double-Booking check inside active transaction with row locking
+            if (checkDateOverlap($listingId, $checkIn, $checkOut, null, true)) {
+                throw new \RuntimeException('DOUBLE_BOOKING_OVERLAP');
+            }
 
-        $stmtInsert->execute([
-            ':code' => $bookingCode,
-            ':lid' => $listingId,
-            ':gid' => $guestId,
-            ':check_in' => $checkIn,
-            ':check_out' => $checkOut,
-            ':guests' => $guestsCount,
-            ':nights' => $pricing['nights'],
-            ':rate' => $pricing['price_per_night'],
-            ':clean' => $pricing['cleaning_fee'],
-            ':serv' => $pricing['service_fee'],
-            ':total' => $pricing['total'],
-            ':method' => $paymentMethod,
-            ':order_id' => $razorpayOrderId,
-            ':pay_id' => $razorpayPaymentId
-        ]);
+            // Generate unique collision-free booking code
+            $cityPrefix = strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', $listing['city'] ?? 'STY'), 0, 3));
+            if (strlen($cityPrefix) < 3) {
+                $cityPrefix = 'STY';
+            }
 
-        $bookingId = (int)$db->lastInsertId();
+            $bookingCode = '';
+            for ($attempt = 0; $attempt < 10; $attempt++) {
+                $candidate = 'BK-' . $cityPrefix . '-' . random_int(100000, 999999);
+                $chk = $db->prepare("SELECT 1 FROM bookings WHERE booking_code = :code LIMIT 1");
+                $chk->execute([':code' => $candidate]);
+                if (!$chk->fetch()) {
+                    $bookingCode = $candidate;
+                    break;
+                }
+            }
+            if (empty($bookingCode)) {
+                $bookingCode = 'BK-' . $cityPrefix . '-' . strtoupper(bin2hex(random_bytes(4)));
+            }
+            $finalBookingCode = $bookingCode;
+
+            $razorpayOrderId = 'order_' . bin2hex(random_bytes(6));
+
+            $stmtInsert = $db->prepare("
+                INSERT INTO bookings (
+                    booking_code, listing_id, guest_id, check_in, check_out, 
+                    guests_count, total_nights, price_per_night, cleaning_fee, service_fee, 
+                    total_price, payment_status, payment_method, razorpay_order_id, razorpay_payment_id, booking_status
+                ) VALUES (
+                    :code, :lid, :gid, :check_in, :check_out,
+                    :guests, :nights, :rate, :clean, :serv,
+                    :total, 'paid', :method, :order_id, :pay_id, 'confirmed'
+                )
+            ");
+
+            $stmtInsert->execute([
+                ':code'      => $bookingCode,
+                ':lid'       => $listingId,
+                ':gid'       => $guestId,
+                ':check_in'  => $checkIn,
+                ':check_out' => $checkOut,
+                ':guests'    => $guestsCount,
+                ':nights'    => $pricing['nights'],
+                ':rate'      => $pricing['price_per_night'],
+                ':clean'     => $pricing['cleaning_fee'],
+                ':serv'      => $pricing['service_fee'],
+                ':total'     => $pricing['total'],
+                ':method'    => $paymentMethod,
+                ':order_id'  => $razorpayOrderId,
+                ':pay_id'    => $razorpayPaymentId
+            ]);
+        });
+
+        $bookingCreated = true;
 
         // Fetch inserted booking for email receipt
-        $stmtB = $db->prepare("SELECT * FROM bookings WHERE id = :id");
-        $stmtB->execute([':id' => $bookingId]);
+        $stmtB = $db->prepare("SELECT * FROM bookings WHERE booking_code = :code");
+        $stmtB->execute([':code' => $finalBookingCode]);
         $booking = $stmtB->fetch();
 
         // Send confirmation email
-        $host = [
-            'name' => $listing['host_name'],
-            'email' => $listing['host_email'],
-            'phone' => $listing['host_phone']
-        ];
-        Mailer::sendBookingConfirmation($booking, $listing, $currentUser, $host);
+        if ($booking) {
+            $host = [
+                'name'  => $listing['host_name'] ?? 'Host',
+                'email' => $listing['host_email'] ?? '',
+                'phone' => $listing['host_phone'] ?? ''
+            ];
+            Mailer::sendBookingConfirmation($booking, $listing, $currentUser, $host);
+        }
+
+        Logger::info("Reservation confirmed successfully", [
+            'booking_code' => $finalBookingCode,
+            'listing_id'   => $listingId,
+            'guest_id'     => $guestId,
+            'total_price'  => $pricing['total']
+        ]);
 
         setFlash('success', 'Reservation confirmed! A booking confirmation email has been generated.');
-        header('Location: ' . BASE_URL . '/booking_confirmation.php?code=' . urlencode($bookingCode));
+        header('Location: ' . BASE_URL . '/booking_confirmation.php?code=' . urlencode($finalBookingCode));
         exit;
 
-    } catch (Exception $e) {
-        setFlash('danger', 'Booking failed: ' . e($e->getMessage()));
+    } catch (\Throwable $e) {
+        if ($e->getMessage() === 'DOUBLE_BOOKING_OVERLAP') {
+            Logger::warning("Double booking prevented by concurrency check", [
+                'listing_id' => $listingId,
+                'guest_id'   => $guestId,
+                'dates'      => "{$checkIn} to {$checkOut}"
+            ]);
+            setFlash('danger', 'Sorry! Another traveler just booked those exact dates. Please select different dates.');
+        } else {
+            Logger::exception($e, [
+                'listing_id' => $listingId,
+                'guest_id'   => $guestId
+            ]);
+            setFlash('danger', 'We could not complete your booking at this time. Please try again.');
+        }
         header('Location: ' . BASE_URL . '/listing_detail.php?id=' . $listingId);
         exit;
     }
@@ -321,7 +384,6 @@ if (strlen($userPhone) < 10) {
 $extraScripts = "
 <script>
 $(document).ready(function() {
-    // Switch between Razorpay and Instant Demo
     $('input[name=\"payment_choice\"]').on('change', function() {
         if ($('#payRazorpay').is(':checked')) {
             $('#btnPayRazorpay').removeClass('d-none');
@@ -338,7 +400,6 @@ $(document).ready(function() {
         $(this).find('input[type=\"radio\"]').prop('checked', true).trigger('change');
     });
 
-    // 1-Click Instant Demo Payment Handler
     $('#btnPayInstant').on('click', function(e) {
         e.preventDefault();
         $('#paymentMethodInput').val('instant_demo');
@@ -346,20 +407,17 @@ $(document).ready(function() {
         $('#checkoutPaymentForm').submit();
     });
 
-    // Razorpay Gateway Handler
     $('#btnPayRazorpay').on('click', function(e) {
         e.preventDefault();
         
-        // Open Razorpay Checkout modal in test mode
         const options = {
             'key': '" . RAZORPAY_KEY_ID . "',
             'amount': " . (int)$totalAmountInPaise . ",
             'currency': '" . CURRENCY_CODE . "',
-            'name': '" . APP_NAME . "',
+            'name': '" . addslashes(APP_NAME) . "',
             'description': 'Booking for " . addslashes($listing['title']) . "',
             'image': '" . BASE_URL . "/assets/images/placeholders/brand_logo.png',
             'handler': function (response) {
-                // Payment succeeded in Razorpay Checkout modal
                 $('#paymentMethodInput').val('razorpay');
                 $('#razorpayPaymentIdInput').val(response.razorpay_payment_id || 'pay_demo_' + Date.now());
                 $('#checkoutPaymentForm').submit();
@@ -388,18 +446,16 @@ $(document).ready(function() {
             if (typeof Razorpay !== 'undefined') {
                 const rzp = new Razorpay(options);
                 rzp.on('payment.failed', function (response){
-                    alert('Payment Error: ' + response.error.description);
+                    alert('Payment Error: ' + (response.error.description || 'Transaction declined'));
                 });
                 rzp.open();
             } else {
-                // Fallback simulation if razorpay CDN blocked/offline
                 if (confirm('Simulate successful Razorpay test payment of " . formatPrice($pricing['total']) . "?')) {
                     $('#razorpayPaymentIdInput').val('pay_sim_' + Math.random().toString(36).substring(2, 9));
                     $('#checkoutPaymentForm').submit();
                 }
             }
         } catch (err) {
-            // Graceful fallback simulation
             if (confirm('Simulate successful Razorpay test payment of " . formatPrice($pricing['total']) . "?')) {
                 $('#razorpayPaymentIdInput').val('pay_sim_' + Math.random().toString(36).substring(2, 9));
                 $('#checkoutPaymentForm').submit();
@@ -410,5 +466,3 @@ $(document).ready(function() {
 </script>
 ";
 include __DIR__ . '/includes/footer.php'; 
-?>
-

@@ -1,38 +1,51 @@
 <?php
 /**
  * StayHub Booking Confirmation Page
+ * Displays confirmed reservation details, receipt summary, and host contact.
  */
 
 require_once __DIR__ . '/config/config.php';
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/logger.php';
 
 requireLogin();
 
-$code = trim($_GET['code'] ?? '');
+$rawCode = trim($_GET['code'] ?? '');
+$code = substr(preg_replace('/[^a-zA-Z0-9_-]/', '', $rawCode), 0, 40);
+
 if (empty($code)) {
     header('Location: ' . BASE_URL . '/my_bookings.php');
     exit;
 }
 
 $db = getDB();
-$userId = getCurrentUserId();
+$userId = (int)getCurrentUserId();
 
-$stmt = $db->prepare("
-    SELECT b.*, l.title as listing_title, l.property_type, l.address as listing_address, l.city as listing_city, l.country as listing_country,
-           u.name as host_name, u.email as host_email, u.phone as host_phone,
-           (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
-    FROM bookings b
-    JOIN listings l ON b.listing_id = l.id
-    JOIN users u ON l.host_id = u.id
-    WHERE b.booking_code = :code AND b.guest_id = :gid
-");
-$stmt->execute([':code' => $code, ':gid' => $userId]);
-$booking = $stmt->fetch();
+try {
+    $stmt = $db->prepare("
+        SELECT b.*, l.title as listing_title, l.property_type, l.address as listing_address, l.city as listing_city, l.country as listing_country, l.host_id,
+               u.name as host_name, u.email as host_email, u.phone as host_phone,
+               (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
+        FROM bookings b
+        JOIN listings l ON b.listing_id = l.id
+        JOIN users u ON l.host_id = u.id
+        WHERE b.booking_code = :code
+    ");
+    $stmt->execute([':code' => $code]);
+    $booking = $stmt->fetch();
 
-if (!$booking) {
-    setFlash('danger', 'Booking reservation not found.');
+    // Authorization check: guest, property host, or admin
+    if (!$booking || ((int)$booking['guest_id'] !== $userId && (int)$booking['host_id'] !== $userId && !hasRole('admin'))) {
+        Logger::security("Unauthorized attempt to access booking confirmation code: {$code} by user {$userId}");
+        setFlash('danger', 'Booking reservation not found or access denied.');
+        header('Location: ' . BASE_URL . '/my_bookings.php');
+        exit;
+    }
+} catch (\Throwable $t) {
+    Logger::error("Error loading booking confirmation: " . $t->getMessage(), ['code' => $code]);
+    setFlash('danger', 'Failed to retrieve booking reservation details.');
     header('Location: ' . BASE_URL . '/my_bookings.php');
     exit;
 }
@@ -83,14 +96,14 @@ include __DIR__ . '/includes/header.php';
                     <div class="col-md-6">
                         <div class="p-3 border rounded-3 bg-white h-100">
                             <div class="text-muted small text-uppercase fw-bold mb-1">Check-in</div>
-                            <div class="fw-bold fs-5 text-dark"><?= date('D, M j, Y', strtotime($booking['check_in'])) ?></div>
+                            <div class="fw-bold fs-5 text-dark"><?= isValidDate($booking['check_in']) ? date('D, M j, Y', strtotime($booking['check_in'])) : e($booking['check_in']) ?></div>
                             <small class="text-muted">From 2:00 PM</small>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="p-3 border rounded-3 bg-white h-100">
                             <div class="text-muted small text-uppercase fw-bold mb-1">Check-out</div>
-                            <div class="fw-bold fs-5 text-dark"><?= date('D, M j, Y', strtotime($booking['check_out'])) ?></div>
+                            <div class="fw-bold fs-5 text-dark"><?= isValidDate($booking['check_out']) ? date('D, M j, Y', strtotime($booking['check_out'])) : e($booking['check_out']) ?></div>
                             <small class="text-muted">Until 11:00 AM</small>
                         </div>
                     </div>
@@ -149,4 +162,3 @@ include __DIR__ . '/includes/header.php';
 </div>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>
-

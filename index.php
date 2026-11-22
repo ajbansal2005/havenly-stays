@@ -9,28 +9,34 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/helpers.php';
 
 $db = getDB();
+$featuredStays = [];
+$topCities = [];
 
-// Fetch featured & approved stays
-$sqlFeatured = "SELECT l.*,
-                COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
-                COALESCE((SELECT COUNT(*) FROM reviews WHERE listing_id = l.id), 0) AS review_count,
-                (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
-                FROM listings l
-                WHERE l.status = 'approved'
-                ORDER BY l.featured DESC, l.id DESC
-                LIMIT 8";
-$stmtFeatured = $db->query($sqlFeatured);
-$featuredStays = $stmtFeatured->fetchAll();
+try {
+    // Fetch featured & approved stays
+    $sqlFeatured = "SELECT l.*,
+                    COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
+                    COALESCE((SELECT COUNT(*) FROM reviews WHERE listing_id = l.id), 0) AS review_count,
+                    (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
+                    FROM listings l
+                    WHERE l.status = 'approved'
+                    ORDER BY l.featured DESC, l.id DESC
+                    LIMIT 8";
+    $stmtFeatured = $db->query($sqlFeatured);
+    $featuredStays = $stmtFeatured->fetchAll();
 
-// Top cities with count
-$sqlCities = "SELECT city, COUNT(*) as stay_count 
-              FROM listings 
-              WHERE status = 'approved' 
-              GROUP BY city 
-              ORDER BY stay_count DESC 
-              LIMIT 6";
-$stmtCities = $db->query($sqlCities);
-$topCities = $stmtCities->fetchAll();
+    // Top cities with count
+    $sqlCities = "SELECT city, COUNT(*) as stay_count 
+                  FROM listings 
+                  WHERE status = 'approved' 
+                  GROUP BY city 
+                  ORDER BY stay_count DESC 
+                  LIMIT 6";
+    $stmtCities = $db->query($sqlCities);
+    $topCities = $stmtCities->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to load homepage featured listings: " . $t->getMessage());
+}
 
 $pageTitle = 'Vacation Homes & Condo Rentals';
 include __DIR__ . '/includes/header.php';

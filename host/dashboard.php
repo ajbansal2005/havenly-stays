@@ -11,50 +11,60 @@ require_once __DIR__ . '/../includes/helpers.php';
 requireRole(['host', 'admin']);
 
 $db = getDB();
-$hostId = getCurrentUserId();
+$hostId = (int)getCurrentUserId();
+$totalListings = 0;
+$totalBookings = 0;
+$totalEarnings = 0.0;
+$activeBookings = 0;
+$recentReservations = [];
 
-// 1. Host Stats
-// Total Listings
-$stmtListings = $db->prepare("SELECT COUNT(*) FROM listings WHERE host_id = :hid");
-$stmtListings->execute([':hid' => $hostId]);
-$totalListings = (int)$stmtListings->fetchColumn();
+try {
+    // 1. Host Stats
+    // Total Listings
+    $stmtListings = $db->prepare("SELECT COUNT(*) FROM listings WHERE host_id = :hid");
+    $stmtListings->execute([':hid' => $hostId]);
+    $totalListings = (int)$stmtListings->fetchColumn();
 
-// Total Bookings & Total Earnings
-$stmtEarnings = $db->prepare("
-    SELECT COUNT(*) as total_bookings,
-           COALESCE(SUM(b.total_price), 0) as total_revenue
-    FROM bookings b
-    JOIN listings l ON b.listing_id = l.id
-    WHERE l.host_id = :hid AND b.booking_status IN ('confirmed', 'completed')
-");
-$stmtEarnings->execute([':hid' => $hostId]);
-$statRow = $stmtEarnings->fetch();
-$totalBookings = (int)$statRow['total_bookings'];
-$totalEarnings = (float)$statRow['total_revenue'];
+    // Total Bookings & Total Earnings
+    $stmtEarnings = $db->prepare("
+        SELECT COUNT(*) as total_bookings,
+               COALESCE(SUM(b.total_price), 0) as total_revenue
+        FROM bookings b
+        JOIN listings l ON b.listing_id = l.id
+        WHERE l.host_id = :hid AND b.booking_status IN ('confirmed', 'completed')
+    ");
+    $stmtEarnings->execute([':hid' => $hostId]);
+    $statRow = $stmtEarnings->fetch();
+    $totalBookings = (int)($statRow['total_bookings'] ?? 0);
+    $totalEarnings = (float)($statRow['total_revenue'] ?? 0);
 
-// Active upcoming bookings
-$today = date('Y-m-d');
-$stmtActive = $db->prepare("
-    SELECT COUNT(*) 
-    FROM bookings b 
-    JOIN listings l ON b.listing_id = l.id 
-    WHERE l.host_id = :hid AND b.booking_status = 'confirmed' AND b.check_in >= :today
-");
-$stmtActive->execute([':hid' => $hostId, ':today' => $today]);
-$activeBookings = (int)$stmtActive->fetchColumn();
+    // Active upcoming bookings
+    $today = date('Y-m-d');
+    $stmtActive = $db->prepare("
+        SELECT COUNT(*) 
+        FROM bookings b 
+        JOIN listings l ON b.listing_id = l.id 
+        WHERE l.host_id = :hid AND b.booking_status = 'confirmed' AND b.check_in >= :today
+    ");
+    $stmtActive->execute([':hid' => $hostId, ':today' => $today]);
+    $activeBookings = (int)$stmtActive->fetchColumn();
 
-// Recent Reservations
-$stmtRecent = $db->prepare("
-    SELECT b.*, l.title as listing_title, u.name as guest_name, u.email as guest_email, u.phone as guest_phone
-    FROM bookings b
-    JOIN listings l ON b.listing_id = l.id
-    JOIN users u ON b.guest_id = u.id
-    WHERE l.host_id = :hid
-    ORDER BY b.created_at DESC
-    LIMIT 6
-");
-$stmtRecent->execute([':hid' => $hostId]);
-$recentReservations = $stmtRecent->fetchAll();
+    // Recent Reservations
+    $stmtRecent = $db->prepare("
+        SELECT b.*, l.title as listing_title, u.name as guest_name, u.email as guest_email, u.phone as guest_phone
+        FROM bookings b
+        JOIN listings l ON b.listing_id = l.id
+        JOIN users u ON b.guest_id = u.id
+        WHERE l.host_id = :hid
+        ORDER BY b.created_at DESC
+        LIMIT 6
+    ");
+    $stmtRecent->execute([':hid' => $hostId]);
+    $recentReservations = $stmtRecent->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to load host dashboard: " . $t->getMessage(), ['host_id' => $hostId]);
+    setFlash('danger', 'Some dashboard metrics could not be loaded.');
+}
 
 $pageTitle = 'Host Dashboard';
 include __DIR__ . '/../includes/header.php';

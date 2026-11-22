@@ -20,26 +20,32 @@ if (in_array($statusFilter, ['confirmed', 'completed', 'cancelled', 'pending'], 
     $params[':status'] = $statusFilter;
 }
 
-$sql = "SELECT b.*, l.title as listing_title, l.city as listing_city,
-               h.name as host_name, h.email as host_email,
-               g.name as guest_name, g.email as guest_email, g.phone as guest_phone
-        FROM bookings b
-        JOIN listings l ON b.listing_id = l.id
-        JOIN users h ON l.host_id = h.id
-        JOIN users g ON b.guest_id = g.id
-        WHERE {$whereClause}
-        ORDER BY b.created_at DESC";
+$bookings = [];
+$totalFilteredRevenue = 0.0;
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$bookings = $stmt->fetchAll();
+try {
+    $sql = "SELECT b.*, l.title as listing_title, l.city as listing_city,
+                   h.name as host_name, h.email as host_email,
+                   g.name as guest_name, g.email as guest_email, g.phone as guest_phone
+            FROM bookings b
+            JOIN listings l ON b.listing_id = l.id
+            JOIN users h ON l.host_id = h.id
+            JOIN users g ON b.guest_id = g.id
+            WHERE {$whereClause}
+            ORDER BY b.created_at DESC";
 
-// Total platform revenue for filtered list
-$totalFilteredRevenue = 0;
-foreach ($bookings as $b) {
-    if ($b['payment_status'] === 'paid') {
-        $totalFilteredRevenue += (float)$b['total_price'];
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $bookings = $stmt->fetchAll();
+
+    foreach ($bookings as $b) {
+        if (($b['payment_status'] ?? '') === 'paid') {
+            $totalFilteredRevenue += (float)($b['total_price'] ?? 0);
+        }
     }
+} catch (\Throwable $t) {
+    Logger::error("Failed to load admin bookings: " . $t->getMessage());
+    setFlash('danger', 'Failed to retrieve bookings.');
 }
 
 $pageTitle = 'All Bookings - Admin';

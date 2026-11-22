@@ -11,20 +11,26 @@ require_once __DIR__ . '/../includes/helpers.php';
 requireRole(['host', 'admin']);
 
 $db = getDB();
-$hostId = getCurrentUserId();
+$hostId = (int)getCurrentUserId();
+$listings = [];
 
-// Fetch host listings with bookings count & primary image
-$sql = "SELECT l.*,
-               COALESCE((SELECT COUNT(*) FROM bookings WHERE listing_id = l.id), 0) AS total_bookings,
-               COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
-               (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
-        FROM listings l
-        WHERE l.host_id = :hid
-        ORDER BY l.created_at DESC";
+try {
+    // Fetch host listings with bookings count & primary image
+    $sql = "SELECT l.*,
+                   COALESCE((SELECT COUNT(*) FROM bookings WHERE listing_id = l.id), 0) AS total_bookings,
+                   COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
+                   (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS primary_image
+            FROM listings l
+            WHERE l.host_id = :hid
+            ORDER BY l.created_at DESC";
 
-$stmt = $db->prepare($sql);
-$stmt->execute([':hid' => $hostId]);
-$listings = $stmt->fetchAll();
+    $stmt = $db->prepare($sql);
+    $stmt->execute([':hid' => $hostId]);
+    $listings = $stmt->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to fetch host listings: " . $t->getMessage(), ['host_id' => $hostId]);
+    setFlash('danger', 'Unable to retrieve your listings. Please try again.');
+}
 
 $pageTitle = 'My Listings - Host';
 include __DIR__ . '/../includes/header.php';

@@ -19,8 +19,13 @@ $initGuests = trim($_GET['guests'] ?? '');
 $initPropertyType = trim($_GET['property_type'] ?? '');
 
 // Fetch all available amenities for filter sidebar
-$stmtAm = $db->query("SELECT * FROM amenities ORDER BY category ASC, name ASC");
-$allAmenities = $stmtAm->fetchAll();
+$allAmenities = [];
+try {
+    $stmtAm = $db->query("SELECT * FROM amenities ORDER BY category ASC, name ASC");
+    $allAmenities = $stmtAm->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to load amenities for search sidebar: " . $t->getMessage());
+}
 
 $pageTitle = 'Explore Stays & Rentals';
 include __DIR__ . '/includes/header.php';

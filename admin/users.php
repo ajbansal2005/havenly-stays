@@ -11,30 +11,45 @@ require_once __DIR__ . '/../includes/helpers.php';
 requireRole('admin');
 
 $db = getDB();
-$currentAdminId = getCurrentUserId();
+$currentAdminId = (int)getCurrentUserId();
 $roleFilter = trim($_GET['role'] ?? 'all');
 
 // Handle Role Change / Status Toggle
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    $csrf = $_POST['csrf_token'] ?? '';
+    $csrf = $_POST['csrf_token'] ?? null;
     $targetUserId = (int)($_POST['user_id'] ?? 0);
+    $action = $_POST['action'];
 
-    if (verifyCsrfToken($csrf) && $targetUserId > 0) {
-        if ($_POST['action'] === 'update_role') {
-            $newRole = in_array($_POST['role'] ?? '', ['guest', 'host', 'admin']) ? $_POST['role'] : 'guest';
-            $stmt = $db->prepare("UPDATE users SET role = :role WHERE id = :id");
-            $stmt->execute([':role' => $newRole, ':id' => $targetUserId]);
-            setFlash('success', 'User role updated to ' . ucfirst($newRole));
-        } elseif ($_POST['action'] === 'toggle_status') {
-            if ($targetUserId === $currentAdminId) {
-                setFlash('danger', 'You cannot suspend your own admin account.');
-            } else {
-                $db->prepare("UPDATE users SET status = CASE WHEN status = 'active' THEN 'suspended' ELSE 'active' END WHERE id = :id")->execute([':id' => $targetUserId]);
-                setFlash('info', 'User account status toggled.');
-            }
-        }
-    } else {
+    if (!verifyCsrfToken($csrf)) {
+        Logger::security("CSRF mismatch on admin user action", ['admin_id' => $currentAdminId, 'action' => $action]);
         setFlash('danger', 'Invalid security token.');
+    } elseif ($targetUserId <= 0) {
+        setFlash('danger', 'Invalid target user.');
+    } else {
+        try {
+            if ($action === 'update_role') {
+                $newRole = in_array($_POST['role'] ?? '', ['guest', 'host', 'admin'], true) ? $_POST['role'] : 'guest';
+                if ($targetUserId === $currentAdminId && $newRole !== 'admin') {
+                    setFlash('danger', 'You cannot demote your own administrator account.');
+                } else {
+                    $stmt = $db->prepare("UPDATE users SET role = :role WHERE id = :id");
+                    $stmt->execute([':role' => $newRole, ':id' => $targetUserId]);
+                    Logger::security("Admin changed user role", ['admin_id' => $currentAdminId, 'target_user_id' => $targetUserId, 'new_role' => $newRole]);
+                    setFlash('success', 'User role updated to ' . ucfirst($newRole));
+                }
+            } elseif ($action === 'toggle_status') {
+                if ($targetUserId === $currentAdminId) {
+                    setFlash('danger', 'You cannot suspend your own admin account.');
+                } else {
+                    $db->prepare("UPDATE users SET status = CASE WHEN status = 'active' THEN 'suspended' ELSE 'active' END WHERE id = :id")->execute([':id' => $targetUserId]);
+                    Logger::security("Admin toggled user status", ['admin_id' => $currentAdminId, 'target_user_id' => $targetUserId]);
+                    setFlash('info', 'User account status toggled.');
+                }
+            }
+        } catch (\Throwable $t) {
+            Logger::error("Admin user modification failed: " . $t->getMessage(), ['target_user_id' => $targetUserId]);
+            setFlash('danger', 'Failed to update user record.');
+        }
     }
     header('Location: ' . BASE_URL . '/admin/users.php?role=' . urlencode($roleFilter));
     exit;
@@ -47,16 +62,22 @@ if (in_array($roleFilter, ['guest', 'host', 'admin'], true)) {
     $params[':role'] = $roleFilter;
 }
 
-$sql = "SELECT u.*,
-               COALESCE((SELECT COUNT(*) FROM listings WHERE host_id = u.id), 0) AS listings_count,
-               COALESCE((SELECT COUNT(*) FROM bookings WHERE guest_id = u.id), 0) AS bookings_count
-        FROM users u
-        WHERE {$whereClause}
-        ORDER BY u.created_at DESC";
+$users = [];
+try {
+    $sql = "SELECT u.*,
+                   COALESCE((SELECT COUNT(*) FROM listings WHERE host_id = u.id), 0) AS listings_count,
+                   COALESCE((SELECT COUNT(*) FROM bookings WHERE guest_id = u.id), 0) AS bookings_count
+            FROM users u
+            WHERE {$whereClause}
+            ORDER BY u.created_at DESC";
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$users = $stmt->fetchAll();
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $users = $stmt->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to fetch admin user list: " . $t->getMessage());
+    setFlash('danger', 'Failed to retrieve user list.');
+}
 
 $pageTitle = 'Manage Users - Admin';
 include __DIR__ . '/../includes/header.php';

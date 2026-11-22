@@ -11,7 +11,7 @@ require_once __DIR__ . '/../includes/helpers.php';
 requireRole(['host', 'admin']);
 
 $db = getDB();
-$hostId = getCurrentUserId();
+$hostId = (int)getCurrentUserId();
 $statusFilter = trim($_GET['status'] ?? 'all');
 
 $whereClauses = ["l.host_id = :hid"];
@@ -23,18 +23,24 @@ if (in_array($statusFilter, ['confirmed', 'completed', 'cancelled', 'pending'], 
 }
 
 $whereSql = implode(' AND ', $whereClauses);
+$bookings = [];
 
-$sql = "SELECT b.*, l.title as listing_title, l.city as listing_city,
-               u.name as guest_name, u.email as guest_email, u.phone as guest_phone, u.avatar as guest_avatar
-        FROM bookings b
-        JOIN listings l ON b.listing_id = l.id
-        JOIN users u ON b.guest_id = u.id
-        WHERE {$whereSql}
-        ORDER BY b.created_at DESC";
+try {
+    $sql = "SELECT b.*, l.title as listing_title, l.city as listing_city,
+                   u.name as guest_name, u.email as guest_email, u.phone as guest_phone, u.avatar as guest_avatar
+            FROM bookings b
+            JOIN listings l ON b.listing_id = l.id
+            JOIN users u ON b.guest_id = u.id
+            WHERE {$whereSql}
+            ORDER BY b.created_at DESC";
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$bookings = $stmt->fetchAll();
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $bookings = $stmt->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to fetch host bookings: " . $t->getMessage(), ['host_id' => $hostId]);
+    setFlash('danger', 'Unable to retrieve guest reservations.');
+}
 
 $pageTitle = 'Guest Reservations - Host';
 include __DIR__ . '/../includes/header.php';

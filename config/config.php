@@ -1,7 +1,8 @@
 <?php
 /**
  * StayHub - Application Configuration
- * Loads environment variables from .env file with secure defaults.
+ * Loads environment variables from .env file with secure defaults,
+ * initializes session management, security headers, global error handling, and structured logging.
  */
 
 // Include Guard: Prevent duplicate loading and constant redefinition warnings
@@ -21,6 +22,7 @@ if (!function_exists('def')) {
 
 // Define Root Path
 def('ROOT_PATH', dirname(__DIR__));
+def('STORAGE_LOGS_DIR', ROOT_PATH . '/storage/logs/');
 
 /**
  * Lightweight .env file parser & loader
@@ -92,10 +94,15 @@ $isVercel = !empty(env('VERCEL')) || !empty($_SERVER['VERCEL']);
 $isRender = !empty(env('RENDER')) || !empty($_SERVER['RENDER']);
 $isCloud  = $isRender || $isVercel || (env('APP_ENV') === 'production');
 
+def('APP_ENV', env('APP_ENV', $isCloud ? 'production' : 'development'));
+$isDebug = filter_var(env('APP_DEBUG', !$isCloud), FILTER_VALIDATE_BOOLEAN);
+def('APP_DEBUG', $isDebug);
+
 // Secure Session Cookie Settings (Configured before session_start)
 if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
     $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
         || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
+        || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
         || $isCloud;
 
     ini_set('session.cookie_httponly', '1');
@@ -106,11 +113,19 @@ if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
     }
 }
 
-// Security HTTP Headers (Prevent Clickjacking, MIME-Sniffing, XSS)
+// Security HTTP Headers (Prevent Clickjacking, MIME-Sniffing, XSS, Info Leaks)
 if (!headers_sent() && php_sapi_name() !== 'cli') {
     header('X-Frame-Options: SAMEORIGIN');
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('X-XSS-Protection: 1; mode=block');
+    header('Permissions-Policy: camera=(), microphone=(), payment=(self)');
+
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+    if ($isHttps) {
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+    }
 }
 
 // Parse cloud database connection string if DATABASE_URL is provided (e.g. Render / Railway / Aiven)
@@ -152,19 +167,127 @@ if ($isVercel) {
     def('SQLITE_PATH', ROOT_PATH . '/database/airbnb.sqlite');
 }
 
+// Start Session with Inactivity Expiration (2 Hours)
 if (php_sapi_name() !== 'cli' && session_status() === PHP_SESSION_NONE) {
     @session_start();
+
+    // Session inactivity timeout (7200 seconds / 2 hours)
+    $maxInactivity = 7200;
+    if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > $maxInactivity)) {
+        $_SESSION = [];
+        if (ini_get("session.use_cookies")) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000,
+                $params["path"], $params["domain"],
+                $params["secure"], $params["httponly"]
+            );
+        }
+        @session_destroy();
+        @session_start();
+        $_SESSION['flash'] = [
+            'type' => 'warning',
+            'message' => 'Your session expired due to inactivity. Please log in again.'
+        ];
+    }
+    $_SESSION['last_activity'] = time();
 }
 
-// Environment & Error reporting (Strictly suppress display_errors in production and cloud to prevent broken layouts)
-$isDebug = filter_var(env('APP_DEBUG', !$isCloud), FILTER_VALIDATE_BOOLEAN);
-if ($isDebug) {
+// Load logger early
+require_once __DIR__ . '/../includes/logger.php';
+
+// Environment & Error reporting
+if (APP_DEBUG) {
     error_reporting(E_ALL);
     ini_set('display_errors', '1');
 } else {
     error_reporting(0);
     ini_set('display_errors', '0');
 }
+
+/**
+ * Determine if current request expects a JSON response
+ */
+function isJsonRequest(): bool {
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+    if (str_contains($uri, '/api/')) {
+        return true;
+    }
+    $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+    if (str_contains($accept, 'application/json')) {
+        return true;
+    }
+    $xRequestedWith = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
+    return strtolower($xRequestedWith) === 'xmlhttprequest';
+}
+
+/**
+ * Production-safe Global Exception Handler
+ */
+set_exception_handler(function (\Throwable $e): void {
+    Logger::exception($e);
+
+    if (!headers_sent()) {
+        http_response_code(500);
+    }
+
+    if (isJsonRequest()) {
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=utf-8');
+        }
+        $response = [
+            'success' => false,
+            'error'   => 'Internal Server Error',
+            'message' => APP_DEBUG ? $e->getMessage() : 'An unexpected error occurred. Please try again later.'
+        ];
+        if (APP_DEBUG) {
+            $response['file'] = $e->getFile();
+            $response['line'] = $e->getLine();
+            $response['trace'] = explode("\n", $e->getTraceAsString());
+        }
+        echo json_encode($response, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // Web response
+    if (APP_DEBUG) {
+        echo "<div style='font-family:monospace;padding:24px;background:#fff0f0;border-left:5px solid #dc3545;margin:20px;border-radius:4px;'>";
+        echo "<h3 style='color:#dc3545;margin-top:0;'>Fatal Error: " . htmlspecialchars($e->getMessage()) . "</h3>";
+        echo "<p><b>File:</b> " . htmlspecialchars($e->getFile()) . " on line <b>" . $e->getLine() . "</b></p>";
+        echo "<pre style='background:#f8f9fa;padding:12px;overflow:auto;'>" . htmlspecialchars($e->getTraceAsString()) . "</pre>";
+        echo "</div>";
+    } else {
+        $base = defined('BASE_URL') ? BASE_URL : '/';
+        echo "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><title>500 - Server Error</title>"
+           . "<link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css' rel='stylesheet'>"
+           . "</head><body class='bg-light d-flex align-items-center min-vh-100'><div class='container text-center py-5'>"
+           . "<div class='card shadow-sm border-0 rounded-4 p-5 mx-auto' style='max-width:550px;'>"
+           . "<div class='text-danger mb-3' style='font-size:4rem;'><i class='bi bi-exclamation-triangle'></i>500</div>"
+           . "<h2 class='fw-bold mb-2'>Something went wrong</h2>"
+           . "<p class='text-muted mb-4'>We encountered an unexpected error on our server. Our team has been automatically notified.</p>"
+           . "<a href='{$base}/' class='btn btn-danger rounded-pill px-4'>Return to Homepage</a>"
+           . "</div></div></body></html>";
+    }
+    exit;
+});
+
+/**
+ * Global Error Handler: Convert critical PHP errors to ErrorException
+ */
+set_error_handler(function (int $errno, string $errstr, string $errfile, int $errline): bool {
+    if (!(error_reporting() & $errno)) {
+        return false;
+    }
+    // Only throw exception on severe errors; log warnings/notices
+    if (in_array($errno, [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR], true)) {
+        throw new \ErrorException($errstr, 0, $errno, $errfile, $errline);
+    }
+    Logger::warning("PHP Notice/Warning: {$errstr}", [
+        'file' => $errfile,
+        'line' => $errline,
+        'errno' => $errno
+    ]);
+    return true;
+});
 
 // Database Configuration (Loaded from .env or parsed cloud URL)
 def('DB_TYPE', env('DB_TYPE', 'mysql')); // 'mysql' or 'sqlite'
@@ -190,7 +313,7 @@ def('CURRENCY_CODE', env('CURRENCY_CODE', 'INR'));
 $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
     || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
     || (isset($_SERVER['HTTP_X_FORWARDED_SSL']) && $_SERVER['HTTP_X_FORWARDED_SSL'] === 'on')
-    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+    || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
     || $isCloud;
 
 $protocol = $isHttps ? "https://" : "http://";
@@ -215,11 +338,10 @@ def('BASE_URL', $baseUrl);
 // Uploads & Paths
 def('UPLOAD_DIR', ROOT_PATH . '/uploads/listings/');
 def('UPLOAD_URL', BASE_URL . '/uploads/listings/');
-def('STORAGE_LOGS_DIR', ROOT_PATH . '/storage/logs/');
 
 // Razorpay Test Credentials (Loaded from .env)
-def('RAZORPAY_KEY_ID', env('RAZORPAY_KEY_ID', 'rzp_test_1DP5mmOlF5G5ag'));
-def('RAZORPAY_KEY_SECRET', env('RAZORPAY_KEY_SECRET', 'test_secret_key_123456'));
+def('RAZORPAY_KEY_ID', env('RAZORPAY_KEY_ID', ''));
+def('RAZORPAY_KEY_SECRET', env('RAZORPAY_KEY_SECRET', ''));
 def('RAZORPAY_TEST_MODE', env('RAZORPAY_TEST_MODE', true));
 
 // Mail Configuration (Loaded from .env)

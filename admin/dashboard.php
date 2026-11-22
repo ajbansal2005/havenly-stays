@@ -11,40 +11,55 @@ require_once __DIR__ . '/../includes/helpers.php';
 requireRole('admin');
 
 $db = getDB();
+$totalUsers = 0;
+$totalGuests = 0;
+$totalHosts = 0;
+$totalListings = 0;
+$pendingListings = 0;
+$approvedListings = 0;
+$totalBookings = 0;
+$totalRevenue = 0.0;
+$pendingList = [];
+$recentBookings = [];
 
-// 1. Stats
-$totalUsers = (int)$db->query("SELECT COUNT(*) FROM users")->fetchColumn();
-$totalGuests = (int)$db->query("SELECT COUNT(*) FROM users WHERE role = 'guest'")->fetchColumn();
-$totalHosts = (int)$db->query("SELECT COUNT(*) FROM users WHERE role = 'host'")->fetchColumn();
+try {
+    // 1. Stats
+    $totalUsers = (int)$db->query("SELECT COUNT(*) FROM users")->fetchColumn();
+    $totalGuests = (int)$db->query("SELECT COUNT(*) FROM users WHERE role = 'guest'")->fetchColumn();
+    $totalHosts = (int)$db->query("SELECT COUNT(*) FROM users WHERE role = 'host'")->fetchColumn();
 
-$totalListings = (int)$db->query("SELECT COUNT(*) FROM listings")->fetchColumn();
-$pendingListings = (int)$db->query("SELECT COUNT(*) FROM listings WHERE status = 'pending'")->fetchColumn();
-$approvedListings = (int)$db->query("SELECT COUNT(*) FROM listings WHERE status = 'approved'")->fetchColumn();
+    $totalListings = (int)$db->query("SELECT COUNT(*) FROM listings")->fetchColumn();
+    $pendingListings = (int)$db->query("SELECT COUNT(*) FROM listings WHERE status = 'pending'")->fetchColumn();
+    $approvedListings = (int)$db->query("SELECT COUNT(*) FROM listings WHERE status = 'approved'")->fetchColumn();
 
-$totalBookings = (int)$db->query("SELECT COUNT(*) FROM bookings")->fetchColumn();
-$totalRevenue = (float)$db->query("SELECT COALESCE(SUM(total_price), 0) FROM bookings WHERE payment_status = 'paid'")->fetchColumn();
+    $totalBookings = (int)$db->query("SELECT COUNT(*) FROM bookings")->fetchColumn();
+    $totalRevenue = (float)$db->query("SELECT COALESCE(SUM(total_price), 0) FROM bookings WHERE payment_status = 'paid'")->fetchColumn();
 
-// Recent Pending Listings
-$stmtPending = $db->query("
-    SELECT l.*, u.name as host_name, u.email as host_email 
-    FROM listings l 
-    JOIN users u ON l.host_id = u.id 
-    WHERE l.status = 'pending' 
-    ORDER BY l.created_at DESC 
-    LIMIT 5
-");
-$pendingList = $stmtPending->fetchAll();
+    // Recent Pending Listings
+    $stmtPending = $db->query("
+        SELECT l.*, u.name as host_name, u.email as host_email 
+        FROM listings l 
+        JOIN users u ON l.host_id = u.id 
+        WHERE l.status = 'pending' 
+        ORDER BY l.created_at DESC 
+        LIMIT 5
+    ");
+    $pendingList = $stmtPending->fetchAll();
 
-// Recent Bookings
-$stmtBookings = $db->query("
-    SELECT b.*, l.title as listing_title, u.name as guest_name 
-    FROM bookings b 
-    JOIN listings l ON b.listing_id = l.id 
-    JOIN users u ON b.guest_id = u.id 
-    ORDER BY b.created_at DESC 
-    LIMIT 6
-");
-$recentBookings = $stmtBookings->fetchAll();
+    // Recent Bookings
+    $stmtBookings = $db->query("
+        SELECT b.*, l.title as listing_title, u.name as guest_name 
+        FROM bookings b 
+        JOIN listings l ON b.listing_id = l.id 
+        JOIN users u ON b.guest_id = u.id 
+        ORDER BY b.created_at DESC 
+        LIMIT 6
+    ");
+    $recentBookings = $stmtBookings->fetchAll();
+} catch (\Throwable $t) {
+    Logger::error("Failed to load admin dashboard: " . $t->getMessage());
+    setFlash('danger', 'Some admin metrics could not be loaded.');
+}
 
 $pageTitle = 'Admin Dashboard';
 include __DIR__ . '/../includes/header.php';

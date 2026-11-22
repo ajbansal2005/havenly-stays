@@ -21,7 +21,7 @@ $stmtCheck = $db->prepare("SELECT * FROM listings WHERE id = :id");
 $stmtCheck->execute([':id' => $listingId]);
 $listing = $stmtCheck->fetch();
 
-if (!$listing || ($listing['host_id'] !== $hostId && !hasRole('admin'))) {
+if (!$listing || ((int)$listing['host_id'] !== $hostId && !hasRole('admin'))) {
     setFlash('danger', 'You do not have permission to edit this listing.');
     header('Location: ' . BASE_URL . '/host/listings.php');
     exit;
@@ -42,31 +42,46 @@ $stmtImgs->execute([':lid' => $listingId]);
 $images = $stmtImgs->fetchAll();
 
 // Handle Image Delete Action
-if (isset($_GET['delete_image_id']) && verifyCsrfToken($_GET['csrf_token'] ?? '')) {
-    $delImgId = (int)$_GET['delete_image_id'];
-    $stmtDelImg = $db->prepare("DELETE FROM listing_images WHERE id = :id AND listing_id = :lid");
-    $stmtDelImg->execute([':id' => $delImgId, ':lid' => $listingId]);
-    setFlash('info', 'Image removed.');
+if (isset($_REQUEST['delete_image_id']) && verifyCsrfToken($_REQUEST['csrf_token'] ?? null)) {
+    $delImgId = (int)$_REQUEST['delete_image_id'];
+    try {
+        $stmtDelImg = $db->prepare("DELETE FROM listing_images WHERE id = :id AND listing_id = :lid");
+        $stmtDelImg->execute([':id' => $delImgId, ':lid' => $listingId]);
+        Logger::info("Image deleted from listing", ['listing_id' => $listingId, 'image_id' => $delImgId]);
+        setFlash('info', 'Image removed.');
+    } catch (\Throwable $t) {
+        Logger::error("Failed to delete listing image: " . $t->getMessage());
+        setFlash('danger', 'Failed to remove image.');
+    }
     header('Location: ' . BASE_URL . '/host/edit_listing.php?id=' . $listingId);
     exit;
 }
 
 // Handle Set Primary Image Action
-if (isset($_GET['set_primary_id']) && verifyCsrfToken($_GET['csrf_token'] ?? '')) {
-    $primId = (int)$_GET['set_primary_id'];
-    $db->prepare("UPDATE listing_images SET is_primary = 0 WHERE listing_id = :lid")->execute([':lid' => $listingId]);
-    $db->prepare("UPDATE listing_images SET is_primary = 1 WHERE id = :id AND listing_id = :lid")->execute([':id' => $primId, ':lid' => $listingId]);
-    setFlash('success', 'Cover photo updated.');
+if (isset($_REQUEST['set_primary_id']) && verifyCsrfToken($_REQUEST['csrf_token'] ?? null)) {
+    $primId = (int)$_REQUEST['set_primary_id'];
+    try {
+        Database::transaction(function (PDO $db) use ($listingId, $primId) {
+            $db->prepare("UPDATE listing_images SET is_primary = 0 WHERE listing_id = :lid")->execute([':lid' => $listingId]);
+            $db->prepare("UPDATE listing_images SET is_primary = 1 WHERE id = :id AND listing_id = :lid")->execute([':id' => $primId, ':lid' => $listingId]);
+        });
+        Logger::info("Listing cover photo updated", ['listing_id' => $listingId, 'image_id' => $primId]);
+        setFlash('success', 'Cover photo updated.');
+    } catch (\Throwable $t) {
+        Logger::error("Failed to update cover photo: " . $t->getMessage());
+        setFlash('danger', 'Failed to update cover photo.');
+    }
     header('Location: ' . BASE_URL . '/host/edit_listing.php?id=' . $listingId);
     exit;
 }
 
 // Handle Form Submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $csrf = $_POST['csrf_token'] ?? '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['delete_image_id']) && !isset($_POST['set_primary_id'])) {
+    $csrf = $_POST['csrf_token'] ?? null;
     $title = trim($_POST['title'] ?? '');
     $description = trim($_POST['description'] ?? '');
-    $propertyType = trim($_POST['property_type'] ?? 'Apartment');
+    $rawPropertyType = trim($_POST['property_type'] ?? 'Apartment');
+    $propertyType = isValidPropertyType($rawPropertyType) ? $rawPropertyType : 'Apartment';
     $address = trim($_POST['address'] ?? '');
     $city = trim($_POST['city'] ?? '');
     $state = trim($_POST['state'] ?? '');
@@ -74,96 +89,116 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $latitude = (float)($_POST['latitude'] ?? $listing['latitude']);
     $longitude = (float)($_POST['longitude'] ?? $listing['longitude']);
     $pricePerNight = (float)($_POST['price_per_night'] ?? 0);
-    $cleaningFee = (float)($_POST['cleaning_fee'] ?? 0);
-    $serviceFee = (float)($_POST['service_fee'] ?? 0);
-    $maxGuests = max(1, (int)($_POST['max_guests'] ?? 1));
-    $bedrooms = max(1, (int)($_POST['bedrooms'] ?? 1));
-    $beds = max(1, (int)($_POST['beds'] ?? 1));
-    $bathrooms = max(1, (int)($_POST['bathrooms'] ?? 1));
+    $cleaningFee = max(0.0, (float)($_POST['cleaning_fee'] ?? 0));
+    $serviceFee = max(0.0, (float)($_POST['service_fee'] ?? 0));
+    $maxGuests = max(1, min(50, (int)($_POST['max_guests'] ?? 1)));
+    $bedrooms = max(1, min(50, (int)($_POST['bedrooms'] ?? 1)));
+    $beds = max(1, min(50, (int)($_POST['beds'] ?? 1)));
+    $bathrooms = max(1, min(50, (int)($_POST['bathrooms'] ?? 1)));
     $selectedAmenities = isset($_POST['amenities']) && is_array($_POST['amenities']) ? array_map('intval', $_POST['amenities']) : [];
     $newImageUrls = isset($_POST['image_urls']) && is_array($_POST['image_urls']) ? array_filter(array_map('trim', $_POST['image_urls'])) : [];
 
+    // Latitude & Longitude bounds check
+    if ($latitude < -90.0 || $latitude > 90.0) $latitude = (float)$listing['latitude'];
+    if ($longitude < -180.0 || $longitude > 180.0) $longitude = (float)$listing['longitude'];
+
     if (!verifyCsrfToken($csrf)) {
         $error = 'Security session expired. Please try again.';
-    } elseif (empty($title) || empty($description) || empty($city) || empty($address) || $pricePerNight <= 0) {
-        $error = 'Please fill out all required fields with valid pricing.';
+    } elseif (mb_strlen($title) < 5 || mb_strlen($title) > 255) {
+        $error = 'Title must be between 5 and 255 characters.';
+    } elseif (mb_strlen($description) < 20 || mb_strlen($description) > 5000) {
+        $error = 'Description must be between 20 and 5,000 characters.';
+    } elseif (empty($city) || mb_strlen($city) > 100 || empty($address) || mb_strlen($address) > 255) {
+        $error = 'Please provide valid address and city details.';
+    } elseif ($pricePerNight <= 0 || $pricePerNight > 10000000) {
+        $error = 'Please provide a valid nightly price between 1 and 10,000,000.';
     } else {
         try {
-            $stmtUp = $db->prepare("
-                UPDATE listings SET
-                    title = :title, description = :desc, property_type = :ptype,
-                    address = :addr, city = :city, state = :state, country = :country,
-                    latitude = :lat, longitude = :lng, price_per_night = :price,
-                    cleaning_fee = :clean, service_fee = :serv,
-                    max_guests = :guests, bedrooms = :beds_room, beds = :beds, bathrooms = :baths
-                WHERE id = :id
-            ");
-            $stmtUp->execute([
-                ':title' => $title,
-                ':desc' => $description,
-                ':ptype' => $propertyType,
-                ':addr' => $address,
-                ':city' => $city,
-                ':state' => $state,
-                ':country' => $country,
-                ':lat' => $latitude,
-                ':lng' => $longitude,
-                ':price' => $pricePerNight,
-                ':clean' => $cleaningFee,
-                ':serv' => $serviceFee,
-                ':guests' => $maxGuests,
-                ':beds_room' => $bedrooms,
-                ':beds' => $beds,
-                ':baths' => $bathrooms,
-                ':id' => $listingId
-            ]);
+            Database::transaction(function (PDO $db) use (
+                $listingId, $title, $description, $propertyType, $address, $city, $state, $country,
+                $latitude, $longitude, $pricePerNight, $cleaningFee, $serviceFee,
+                $maxGuests, $bedrooms, $beds, $bathrooms, $selectedAmenities, $newImageUrls
+            ) {
+                $stmtUp = $db->prepare("
+                    UPDATE listings SET
+                        title = :title, description = :desc, property_type = :ptype,
+                        address = :addr, city = :city, state = :state, country = :country,
+                        latitude = :lat, longitude = :lng, price_per_night = :price,
+                        cleaning_fee = :clean, service_fee = :serv,
+                        max_guests = :guests, bedrooms = :beds_room, beds = :beds, bathrooms = :baths
+                    WHERE id = :id
+                ");
+                $stmtUp->execute([
+                    ':title'     => $title,
+                    ':desc'      => $description,
+                    ':ptype'     => $propertyType,
+                    ':addr'      => $address,
+                    ':city'      => $city,
+                    ':state'     => $state,
+                    ':country'   => $country,
+                    ':lat'       => $latitude,
+                    ':lng'       => $longitude,
+                    ':price'     => $pricePerNight,
+                    ':clean'     => $cleaningFee,
+                    ':serv'      => $serviceFee,
+                    ':guests'    => $maxGuests,
+                    ':beds_room' => $bedrooms,
+                    ':beds'      => $beds,
+                    ':baths'     => $bathrooms,
+                    ':id'        => $listingId
+                ]);
 
-            // Sync amenities
-            $db->prepare("DELETE FROM listing_amenities WHERE listing_id = :lid")->execute([':lid' => $listingId]);
-            if (!empty($selectedAmenities)) {
-                $stmtLa = $db->prepare("INSERT INTO listing_amenities (listing_id, amenity_id) VALUES (:lid, :aid)");
-                foreach ($selectedAmenities as $aid) {
-                    $stmtLa->execute([':lid' => $listingId, ':aid' => $aid]);
-                }
-            }
-
-            // Upload new files
-            if (!empty($_FILES['listing_files']['name'][0])) {
-                $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, 0)");
-                $totalFiles = count($_FILES['listing_files']['name']);
-                for ($i = 0; $i < $totalFiles; $i++) {
-                    if ($_FILES['listing_files']['error'][$i] === UPLOAD_ERR_OK) {
-                        $singleFile = [
-                            'name' => $_FILES['listing_files']['name'][$i],
-                            'type' => $_FILES['listing_files']['type'][$i],
-                            'tmp_name' => $_FILES['listing_files']['tmp_name'][$i],
-                            'error' => $_FILES['listing_files']['error'][$i],
-                            'size' => $_FILES['listing_files']['size'][$i]
-                        ];
-                        $uploadedUrl = uploadListingImage($singleFile);
-                        if ($uploadedUrl) {
-                            $stmtImgIns->execute([':lid' => $listingId, ':url' => $uploadedUrl]);
+                // Sync amenities
+                $db->prepare("DELETE FROM listing_amenities WHERE listing_id = :lid")->execute([':lid' => $listingId]);
+                if (!empty($selectedAmenities)) {
+                    $stmtLa = $db->prepare("INSERT INTO listing_amenities (listing_id, amenity_id) VALUES (:lid, :aid)");
+                    foreach ($selectedAmenities as $aid) {
+                        if ($aid > 0) {
+                            $stmtLa->execute([':lid' => $listingId, ':aid' => $aid]);
                         }
                     }
                 }
-            }
 
-            // Add new image URLs (validated to http/https only)
-            if (!empty($newImageUrls)) {
-                $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, 0)");
-                foreach ($newImageUrls as $url) {
-                    if (!empty($url) && filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url)) {
-                        $stmtImgIns->execute([':lid' => $listingId, ':url' => $url]);
+                // Upload new files
+                if (!empty($_FILES['listing_files']['name'][0])) {
+                    $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, 0)");
+                    $totalFiles = count($_FILES['listing_files']['name']);
+                    for ($i = 0; $i < $totalFiles; $i++) {
+                        if (isset($_FILES['listing_files']['error'][$i]) && $_FILES['listing_files']['error'][$i] === UPLOAD_ERR_OK) {
+                            $singleFile = [
+                                'name'     => $_FILES['listing_files']['name'][$i],
+                                'type'     => $_FILES['listing_files']['type'][$i],
+                                'tmp_name' => $_FILES['listing_files']['tmp_name'][$i],
+                                'error'    => $_FILES['listing_files']['error'][$i],
+                                'size'     => $_FILES['listing_files']['size'][$i]
+                            ];
+                            $uploadedUrl = uploadListingImage($singleFile);
+                            if ($uploadedUrl) {
+                                $stmtImgIns->execute([':lid' => $listingId, ':url' => $uploadedUrl]);
+                            }
+                        }
                     }
                 }
-            }
 
+                // Add new image URLs (validated to http/https only)
+                if (!empty($newImageUrls)) {
+                    $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, 0)");
+                    foreach ($newImageUrls as $url) {
+                        if (!empty($url) && filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url) && strlen($url) <= 500) {
+                            $stmtImgIns->execute([':lid' => $listingId, ':url' => $url]);
+                        }
+                    }
+                }
+            });
+
+            Logger::info("Listing updated successfully", ['listing_id' => $listingId]);
             setFlash('success', 'Listing updated successfully!');
             header('Location: ' . BASE_URL . '/host/edit_listing.php?id=' . $listingId);
             exit;
 
-        } catch (Exception $e) {
-            $error = 'Failed to update stay: ' . $e->getMessage();
+        } catch (\Throwable $e) {
+            Logger::error("Failed to update stay: " . $e->getMessage(), ['listing_id' => $listingId]);
+            $error = 'Failed to update stay. Please verify your inputs and try again.';
         }
     }
 }

@@ -76,8 +76,8 @@ Under the **Environment** tab, add:
 | `DB_NAME` | `<your-cloud-mysql-dbname>` |
 | `DB_USER` | `<your-cloud-mysql-user>` |
 | `DB_PASS` | `<your-cloud-mysql-password>` |
-| `RAZORPAY_KEY_ID` | `rzp_test_1DP5mmOlF5G5ag` |
-| `RAZORPAY_KEY_SECRET` | `test_secret_key_123456` |
+| `RAZORPAY_KEY_ID` | `<your-razorpay-test-key-id>` |
+| `RAZORPAY_KEY_SECRET` | `<your-razorpay-test-key-secret>` |
 | `RAZORPAY_TEST_MODE` | `true` |
 
 *(Alternatively, if your cloud provider gives a connection URL like `mysql://user:pass@host:port/dbname`, simply add `DATABASE_URL` and StayHub will parse it automatically!)*
@@ -109,8 +109,8 @@ Expand **Environment Variables** and add:
 - `DB_NAME`: `<your-cloud-mysql-dbname>`
 - `DB_USER`: `<your-cloud-mysql-user>`
 - `DB_PASS`: `<your-cloud-mysql-password>`
-- `RAZORPAY_KEY_ID`: `rzp_test_1DP5mmOlF5G5ag`
-- `RAZORPAY_KEY_SECRET`: `test_secret_key_123456`
+- `RAZORPAY_KEY_ID`: `<your-razorpay-test-key-id>`
+- `RAZORPAY_KEY_SECRET`: `<your-razorpay-test-key-secret>`
 - `RAZORPAY_TEST_MODE`: `true`
 - `APP_DEBUG`: `false`
 

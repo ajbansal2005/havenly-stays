@@ -20,10 +20,11 @@ $stmtAm = $db->query("SELECT * FROM amenities ORDER BY category ASC, name ASC");
 $allAmenities = $stmtAm->fetchAll();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $csrf = $_POST['csrf_token'] ?? '';
+    $csrf = $_POST['csrf_token'] ?? null;
     $title = trim($_POST['title'] ?? '');
     $description = trim($_POST['description'] ?? '');
-    $propertyType = trim($_POST['property_type'] ?? 'Apartment');
+    $rawPropertyType = trim($_POST['property_type'] ?? 'Apartment');
+    $propertyType = isValidPropertyType($rawPropertyType) ? $rawPropertyType : 'Apartment';
     $address = trim($_POST['address'] ?? '');
     $city = trim($_POST['city'] ?? '');
     $state = trim($_POST['state'] ?? '');
@@ -31,110 +32,137 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $latitude = (float)($_POST['latitude'] ?? 15.5996);
     $longitude = (float)($_POST['longitude'] ?? 73.7439);
     $pricePerNight = (float)($_POST['price_per_night'] ?? 0);
-    $cleaningFee = (float)($_POST['cleaning_fee'] ?? 0);
-    $serviceFee = (float)($_POST['service_fee'] ?? 0);
-    $maxGuests = max(1, (int)($_POST['max_guests'] ?? 1));
-    $bedrooms = max(1, (int)($_POST['bedrooms'] ?? 1));
-    $beds = max(1, (int)($_POST['beds'] ?? 1));
-    $bathrooms = max(1, (int)($_POST['bathrooms'] ?? 1));
+    $cleaningFee = max(0.0, (float)($_POST['cleaning_fee'] ?? 0));
+    $serviceFee = max(0.0, (float)($_POST['service_fee'] ?? 0));
+    $maxGuests = max(1, min(50, (int)($_POST['max_guests'] ?? 1)));
+    $bedrooms = max(1, min(50, (int)($_POST['bedrooms'] ?? 1)));
+    $beds = max(1, min(50, (int)($_POST['beds'] ?? 1)));
+    $bathrooms = max(1, min(50, (int)($_POST['bathrooms'] ?? 1)));
     $selectedAmenities = isset($_POST['amenities']) && is_array($_POST['amenities']) ? array_map('intval', $_POST['amenities']) : [];
     $imageUrls = isset($_POST['image_urls']) && is_array($_POST['image_urls']) ? array_filter(array_map('trim', $_POST['image_urls'])) : [];
 
+    // Latitude & Longitude bounds check
+    if ($latitude < -90.0 || $latitude > 90.0) $latitude = 15.5996;
+    if ($longitude < -180.0 || $longitude > 180.0) $longitude = 73.7439;
+
     if (!verifyCsrfToken($csrf)) {
         $error = 'Security session expired. Please try again.';
-    } elseif (empty($title) || empty($description) || empty($city) || empty($address) || $pricePerNight <= 0) {
-        $error = 'Please fill out all required fields with valid pricing.';
+    } elseif (mb_strlen($title) < 5 || mb_strlen($title) > 255) {
+        $error = 'Title must be between 5 and 255 characters.';
+    } elseif (mb_strlen($description) < 20 || mb_strlen($description) > 5000) {
+        $error = 'Description must be between 20 and 5,000 characters.';
+    } elseif (empty($city) || mb_strlen($city) > 100 || empty($address) || mb_strlen($address) > 255) {
+        $error = 'Please provide valid address and city details.';
+    } elseif ($pricePerNight <= 0 || $pricePerNight > 10000000) {
+        $error = 'Please provide a valid nightly price between 1 and 10,000,000.';
     } else {
         try {
-            $stmtIns = $db->prepare("
-                INSERT INTO listings (
-                    host_id, title, description, property_type, address, city, state, country,
-                    latitude, longitude, price_per_night, cleaning_fee, service_fee,
-                    max_guests, bedrooms, beds, bathrooms, status
-                ) VALUES (
-                    :hid, :title, :desc, :ptype, :addr, :city, :state, :country,
-                    :lat, :lng, :price, :clean, :serv,
-                    :guests, :beds_room, :beds, :baths, 'approved'
-                )
-            ");
-            $stmtIns->execute([
-                ':hid' => $hostId,
-                ':title' => $title,
-                ':desc' => $description,
-                ':ptype' => $propertyType,
-                ':addr' => $address,
-                ':city' => $city,
-                ':state' => $state,
-                ':country' => $country,
-                ':lat' => $latitude,
-                ':lng' => $longitude,
-                ':price' => $pricePerNight,
-                ':clean' => $cleaningFee,
-                ':serv' => $serviceFee,
-                ':guests' => $maxGuests,
-                ':beds_room' => $bedrooms,
-                ':beds' => $beds,
-                ':baths' => $bathrooms
-            ]);
+            $listingId = 0;
+            Database::transaction(function (PDO $db) use (
+                $hostId, $title, $description, $propertyType, $address, $city, $state, $country,
+                $latitude, $longitude, $pricePerNight, $cleaningFee, $serviceFee,
+                $maxGuests, $bedrooms, $beds, $bathrooms, $selectedAmenities, $imageUrls,
+                &$listingId
+            ) {
+                $stmtIns = $db->prepare("
+                    INSERT INTO listings (
+                        host_id, title, description, property_type, address, city, state, country,
+                        latitude, longitude, price_per_night, cleaning_fee, service_fee,
+                        max_guests, bedrooms, beds, bathrooms, status
+                    ) VALUES (
+                        :hid, :title, :desc, :ptype, :addr, :city, :state, :country,
+                        :lat, :lng, :price, :clean, :serv,
+                        :guests, :beds_room, :beds, :baths, 'approved'
+                    )
+                ");
+                $stmtIns->execute([
+                    ':hid'       => $hostId,
+                    ':title'     => $title,
+                    ':desc'      => $description,
+                    ':ptype'     => $propertyType,
+                    ':addr'      => $address,
+                    ':city'      => $city,
+                    ':state'     => $state,
+                    ':country'   => $country,
+                    ':lat'       => $latitude,
+                    ':lng'       => $longitude,
+                    ':price'     => $pricePerNight,
+                    ':clean'     => $cleaningFee,
+                    ':serv'      => $serviceFee,
+                    ':guests'    => $maxGuests,
+                    ':beds_room' => $bedrooms,
+                    ':beds'      => $beds,
+                    ':baths'     => $bathrooms
+                ]);
 
-            $listingId = (int)$db->lastInsertId();
+                $listingId = (int)$db->lastInsertId();
 
-            // Insert selected amenities
-            if (!empty($selectedAmenities)) {
-                $stmtLa = $db->prepare("INSERT INTO listing_amenities (listing_id, amenity_id) VALUES (:lid, :aid)");
-                foreach ($selectedAmenities as $aid) {
-                    $stmtLa->execute([':lid' => $listingId, ':aid' => $aid]);
+                // Insert selected amenities
+                if (!empty($selectedAmenities)) {
+                    $stmtLa = $db->prepare("INSERT INTO listing_amenities (listing_id, amenity_id) VALUES (:lid, :aid)");
+                    foreach ($selectedAmenities as $aid) {
+                        if ($aid > 0) {
+                            $stmtLa->execute([':lid' => $listingId, ':aid' => $aid]);
+                        }
+                    }
                 }
-            }
 
-            // Handle File Uploads
-            $hasPrimary = false;
-            if (!empty($_FILES['listing_files']['name'][0])) {
-                $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, :is_prim)");
-                $totalFiles = count($_FILES['listing_files']['name']);
-                for ($i = 0; $i < $totalFiles; $i++) {
-                    if ($_FILES['listing_files']['error'][$i] === UPLOAD_ERR_OK) {
-                        $singleFile = [
-                            'name' => $_FILES['listing_files']['name'][$i],
-                            'type' => $_FILES['listing_files']['type'][$i],
-                            'tmp_name' => $_FILES['listing_files']['tmp_name'][$i],
-                            'error' => $_FILES['listing_files']['error'][$i],
-                            'size' => $_FILES['listing_files']['size'][$i]
-                        ];
-                        $uploadedUrl = uploadListingImage($singleFile);
-                        if ($uploadedUrl) {
+                // Handle File Uploads
+                $hasPrimary = false;
+                if (!empty($_FILES['listing_files']['name'][0])) {
+                    $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, :is_prim)");
+                    $totalFiles = count($_FILES['listing_files']['name']);
+                    for ($i = 0; $i < $totalFiles; $i++) {
+                        if (isset($_FILES['listing_files']['error'][$i]) && $_FILES['listing_files']['error'][$i] === UPLOAD_ERR_OK) {
+                            $singleFile = [
+                                'name'     => $_FILES['listing_files']['name'][$i],
+                                'type'     => $_FILES['listing_files']['type'][$i],
+                                'tmp_name' => $_FILES['listing_files']['tmp_name'][$i],
+                                'error'    => $_FILES['listing_files']['error'][$i],
+                                'size'     => $_FILES['listing_files']['size'][$i]
+                            ];
+                            $uploadedUrl = uploadListingImage($singleFile);
+                            if ($uploadedUrl) {
+                                $isPrim = !$hasPrimary ? 1 : 0;
+                                $stmtImgIns->execute([':lid' => $listingId, ':url' => $uploadedUrl, ':is_prim' => $isPrim]);
+                                $hasPrimary = true;
+                            }
+                        }
+                    }
+                }
+
+                // Insert Web Image URLs (validated to http/https only)
+                if (!empty($imageUrls)) {
+                    $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, :is_prim)");
+                    foreach ($imageUrls as $url) {
+                        if (!empty($url) && filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url) && strlen($url) <= 500) {
                             $isPrim = !$hasPrimary ? 1 : 0;
-                            $stmtImgIns->execute([':lid' => $listingId, ':url' => $uploadedUrl, ':is_prim' => $isPrim]);
+                            $stmtImgIns->execute([':lid' => $listingId, ':url' => $url, ':is_prim' => $isPrim]);
                             $hasPrimary = true;
                         }
                     }
                 }
-            }
 
-            // Insert Web Image URLs (validated to http/https only)
-            if (!empty($imageUrls)) {
-                $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, :is_prim)");
-                foreach ($imageUrls as $url) {
-                    if (!empty($url) && filter_var($url, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $url)) {
-                        $isPrim = !$hasPrimary ? 1 : 0;
-                        $stmtImgIns->execute([':lid' => $listingId, ':url' => $url, ':is_prim' => $isPrim]);
-                        $hasPrimary = true;
-                    }
+                // Fallback default image if none provided
+                if (!$hasPrimary) {
+                    $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, 1)");
+                    $stmtImgIns->execute([':lid' => $listingId, ':url' => 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?w=1200']);
                 }
-            }
+            });
 
-            // Fallback default image if none provided
-            if (!$hasPrimary) {
-                $stmtImgIns = $db->prepare("INSERT INTO listing_images (listing_id, image_url, is_primary) VALUES (:lid, :url, 1)");
-                $stmtImgIns->execute([':lid' => $listingId, ':url' => 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?w=1200']);
-            }
+            Logger::info("New listing created successfully", [
+                'listing_id' => $listingId,
+                'host_id'    => $hostId,
+                'title'      => $title
+            ]);
 
-            setFlash('success', 'Stay <strong>' . e($title) . '</strong> created successfully and is now live!');
+            setFlash('success', 'Stay <strong>' . e($title) . '</strong> created successfully and is now live!', true);
             header('Location: ' . BASE_URL . '/host/listings.php');
             exit;
 
-        } catch (Exception $e) {
-            $error = 'Failed to create stay: ' . $e->getMessage();
+        } catch (\Throwable $e) {
+            Logger::error("Failed to create listing: " . $e->getMessage(), ['host_id' => $hostId]);
+            $error = 'Failed to create stay. Please verify your inputs and try again.';
         }
     }
 }

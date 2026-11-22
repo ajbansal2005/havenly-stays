@@ -17,22 +17,34 @@ $today = date('Y-m-d');
 // Handle Cancellation
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_booking') {
     $bookingId = (int)($_POST['booking_id'] ?? 0);
-    $csrf = $_POST['csrf_token'] ?? '';
+    $csrf = $_POST['csrf_token'] ?? null;
 
     if (!verifyCsrfToken($csrf)) {
-        setFlash('danger', 'Security session expired.');
+        setFlash('danger', 'Security session expired. Please try again.');
+    } elseif ($bookingId <= 0) {
+        setFlash('danger', 'Invalid booking reservation.');
     } else {
-        $stmtCancel = $db->prepare("
-            UPDATE bookings 
-            SET booking_status = 'cancelled' 
-            WHERE id = :id AND guest_id = :gid AND booking_status = 'confirmed' AND check_in > :today
-        ");
-        $stmtCancel->execute([':id' => $bookingId, ':gid' => $userId, ':today' => $today]);
+        try {
+            $cancelled = false;
+            Database::transaction(function (PDO $db) use ($bookingId, $userId, $today, &$cancelled) {
+                $stmtCancel = $db->prepare("
+                    UPDATE bookings 
+                    SET booking_status = 'cancelled' 
+                    WHERE id = :id AND guest_id = :gid AND booking_status = 'confirmed' AND check_in > :today
+                ");
+                $stmtCancel->execute([':id' => $bookingId, ':gid' => $userId, ':today' => $today]);
+                $cancelled = ($stmtCancel->rowCount() > 0);
+            });
 
-        if ($stmtCancel->rowCount() > 0) {
-            setFlash('success', 'Your booking reservation has been cancelled.');
-        } else {
-            setFlash('danger', 'Unable to cancel booking. It may have already started or been cancelled.');
+            if ($cancelled) {
+                Logger::info("Booking cancelled by guest", ['booking_id' => $bookingId, 'guest_id' => $userId]);
+                setFlash('success', 'Your booking reservation has been cancelled.');
+            } else {
+                setFlash('danger', 'Unable to cancel booking. It may have already started or was previously cancelled.');
+            }
+        } catch (\Throwable $t) {
+            Logger::error("Booking cancellation error: " . $t->getMessage(), ['booking_id' => $bookingId, 'guest_id' => $userId]);
+            setFlash('danger', 'An error occurred while cancelling your reservation.');
         }
     }
     header('Location: ' . BASE_URL . '/my_bookings.php');

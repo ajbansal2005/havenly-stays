@@ -19,90 +19,101 @@ if ($listingId <= 0) {
 $db = getDB();
 $currentUser = getCurrentUser();
 $userId = $currentUser['id'] ?? null;
-
-// Fetch listing
-$stmtListing = $db->prepare("
-    SELECT l.*, 
-           u.name AS host_name, u.avatar AS host_avatar, u.bio AS host_bio, u.created_at AS host_joined,
-           COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
-           COALESCE((SELECT COUNT(*) FROM reviews WHERE listing_id = l.id), 0) AS review_count
-    FROM listings l
-    JOIN users u ON l.host_id = u.id
-    WHERE l.id = :id
-");
-$stmtListing->execute([':id' => $listingId]);
-$listing = $stmtListing->fetch();
-
-if (!$listing) {
-    setFlash('danger', 'Listing not found.');
-    header('Location: ' . BASE_URL . '/listings.php');
-    exit;
-}
-
-// Check approval status: only host or admin can view pending/rejected listings
-if ($listing['status'] !== 'approved' && (!isLoggedIn() || ($listing['host_id'] !== $userId && !hasRole('admin')))) {
-    setFlash('warning', 'This listing is currently pending approval.');
-    header('Location: ' . BASE_URL . '/listings.php');
-    exit;
-}
-
-// Fetch images
-$stmtImgs = $db->prepare("SELECT * FROM listing_images WHERE listing_id = :lid ORDER BY is_primary DESC, id ASC");
-$stmtImgs->execute([':lid' => $listingId]);
-$images = $stmtImgs->fetchAll();
-
-// Fallback images if none exists
-if (empty($images)) {
-    $images = [
-        ['image_url' => 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?w=1200', 'is_primary' => 1]
-    ];
-}
-
-// Fetch amenities
-$stmtAm = $db->prepare("
-    SELECT a.* FROM amenities a
-    JOIN listing_amenities la ON a.id = la.amenity_id
-    WHERE la.listing_id = :lid
-    ORDER BY a.category ASC, a.name ASC
-");
-$stmtAm->execute([':lid' => $listingId]);
-$amenities = $stmtAm->fetchAll();
-
-// Fetch reviews
-$stmtRev = $db->prepare("
-    SELECT r.*, u.name as guest_name, u.avatar as guest_avatar
-    FROM reviews r
-    JOIN users u ON r.guest_id = u.id
-    WHERE r.listing_id = :lid
-    ORDER BY r.created_at DESC
-");
-$stmtRev->execute([':lid' => $listingId]);
-$reviews = $stmtRev->fetchAll();
-
-// Check if current user is eligible to write a review
+$listing = null;
+$images = [];
+$amenities = [];
+$reviews = [];
 $canReview = false;
 $eligibleBookingId = null;
-if (isLoggedIn() && hasRole('guest')) {
-    $today = date('Y-m-d');
-    $stmtEligible = $db->prepare("
-        SELECT id FROM bookings 
-        WHERE listing_id = :lid 
-          AND guest_id = :gid 
-          AND (booking_status = 'completed' OR (booking_status = 'confirmed' AND check_out <= :today))
-        LIMIT 1
-    ");
-    $stmtEligible->execute([':lid' => $listingId, ':gid' => $userId, ':today' => $today]);
-    $bookingCheck = $stmtEligible->fetch();
 
-    if ($bookingCheck) {
-        // Check if already reviewed
-        $stmtRevDone = $db->prepare("SELECT 1 FROM reviews WHERE listing_id = :lid AND guest_id = :gid");
-        $stmtRevDone->execute([':lid' => $listingId, ':gid' => $userId]);
-        if (!$stmtRevDone->fetch()) {
-            $canReview = true;
-            $eligibleBookingId = (int)$bookingCheck['id'];
+try {
+    // Fetch listing
+    $stmtListing = $db->prepare("
+        SELECT l.*, 
+               u.name AS host_name, u.avatar AS host_avatar, u.bio AS host_bio, u.created_at AS host_joined,
+               COALESCE((SELECT AVG(rating) FROM reviews WHERE listing_id = l.id), 0) AS avg_rating,
+               COALESCE((SELECT COUNT(*) FROM reviews WHERE listing_id = l.id), 0) AS review_count
+        FROM listings l
+        JOIN users u ON l.host_id = u.id
+        WHERE l.id = :id
+    ");
+    $stmtListing->execute([':id' => $listingId]);
+    $listing = $stmtListing->fetch();
+
+    if (!$listing) {
+        setFlash('danger', 'Listing not found.');
+        header('Location: ' . BASE_URL . '/listings.php');
+        exit;
+    }
+
+    // Check approval status: only host or admin can view pending/rejected listings
+    if ($listing['status'] !== 'approved' && (!isLoggedIn() || ((int)$listing['host_id'] !== (int)$userId && !hasRole('admin')))) {
+        setFlash('warning', 'This listing is currently pending approval.');
+        header('Location: ' . BASE_URL . '/listings.php');
+        exit;
+    }
+
+    // Fetch images
+    $stmtImgs = $db->prepare("SELECT * FROM listing_images WHERE listing_id = :lid ORDER BY is_primary DESC, id ASC");
+    $stmtImgs->execute([':lid' => $listingId]);
+    $images = $stmtImgs->fetchAll();
+
+    // Fallback images if none exists
+    if (empty($images)) {
+        $images = [
+            ['image_url' => 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?w=1200', 'is_primary' => 1]
+        ];
+    }
+
+    // Fetch amenities
+    $stmtAm = $db->prepare("
+        SELECT a.* FROM amenities a
+        JOIN listing_amenities la ON a.id = la.amenity_id
+        WHERE la.listing_id = :lid
+        ORDER BY a.category ASC, a.name ASC
+    ");
+    $stmtAm->execute([':lid' => $listingId]);
+    $amenities = $stmtAm->fetchAll();
+
+    // Fetch reviews
+    $stmtRev = $db->prepare("
+        SELECT r.*, u.name as guest_name, u.avatar as guest_avatar
+        FROM reviews r
+        JOIN users u ON r.guest_id = u.id
+        WHERE r.listing_id = :lid
+        ORDER BY r.created_at DESC
+    ");
+    $stmtRev->execute([':lid' => $listingId]);
+    $reviews = $stmtRev->fetchAll();
+
+    // Check if current user is eligible to write a review
+    if (isLoggedIn() && hasRole('guest')) {
+        $today = date('Y-m-d');
+        $stmtEligible = $db->prepare("
+            SELECT id FROM bookings 
+            WHERE listing_id = :lid 
+              AND guest_id = :gid 
+              AND (booking_status = 'completed' OR (booking_status = 'confirmed' AND check_out <= :today))
+            LIMIT 1
+        ");
+        $stmtEligible->execute([':lid' => $listingId, ':gid' => (int)$userId, ':today' => $today]);
+        $bookingCheck = $stmtEligible->fetch();
+
+        if ($bookingCheck) {
+            // Check if already reviewed
+            $stmtRevDone = $db->prepare("SELECT 1 FROM reviews WHERE listing_id = :lid AND guest_id = :gid LIMIT 1");
+            $stmtRevDone->execute([':lid' => $listingId, ':gid' => (int)$userId]);
+            if (!$stmtRevDone->fetch()) {
+                $canReview = true;
+                $eligibleBookingId = (int)$bookingCheck['id'];
+            }
         }
     }
+} catch (\Throwable $t) {
+    Logger::error("Failed to load listing detail: " . $t->getMessage(), ['listing_id' => $listingId]);
+    setFlash('danger', 'An error occurred while loading this property.');
+    header('Location: ' . BASE_URL . '/listings.php');
+    exit;
 }
 
 $isFav = isWishlisted($listingId, $userId);

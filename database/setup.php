@@ -11,15 +11,15 @@ require_once __DIR__ . '/../includes/auth.php';
 $isCli = (php_sapi_name() === 'cli');
 $lockFile = __DIR__ . '/.installed';
 
-// Security: If already installed and accessed via web browser, require admin authentication (unless ?force=1 passed)
-if (!$isCli && file_exists($lockFile) && !isset($_GET['force'])) {
+// Security: If already installed and accessed via web browser, strictly require administrator login
+if (!$isCli && file_exists($lockFile)) {
     if (!isLoggedIn() || !hasRole('admin')) {
         http_response_code(403);
         die("<div style='font-family:sans-serif;max-width:550px;margin:50px auto;padding:24px;border:1px solid #f5c6cb;background:#f8d7da;color:#721c24;border-radius:12px;'>"
             . "<h4 style='margin-top:0;'>Security Lock: Database Already Initialized</h4>"
-            . "<p>The database is already setup. To re-seed or re-run setup via web, you must be logged in as an <strong>Administrator</strong>.</p>"
-            . "<p>Alternatively, execute from your terminal: <code>php database/setup.php</code></p>"
-            . "<a href='" . BASE_URL . "/login.php' style='display:inline-block;padding:8px 16px;background:#0d6efd;color:white;text-decoration:none;border-radius:6px;'>Log in as Admin</a>"
+            . "<p>The database has already been initialized. To re-seed or reset via web, you must be logged in as an <strong>Administrator</strong>.</p>"
+            . "<p>Alternatively, execute securely from your server terminal: <code>php database/setup.php</code></p>"
+            . "<a href='" . BASE_URL . "/login.php?redirect=" . urlencode(BASE_URL . '/database/setup.php') . "' style='display:inline-block;padding:8px 16px;background:#0d6efd;color:white;text-decoration:none;border-radius:6px;'>Log in as Admin</a>"
             . "</div>");
     }
 }
